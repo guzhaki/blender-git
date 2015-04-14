@@ -38,7 +38,6 @@ extern "C" {
 #include "BLI_compiler_attrs.h"
 
 struct ListBase;
-struct direntry;
 
 #ifdef WIN32
 #define SEP '\\'
@@ -87,7 +86,7 @@ bool BLI_testextensie_glob(const char *str, const char *ext_fnmatch) ATTR_NONNUL
 bool BLI_replace_extension(char *path, size_t maxlen, const char *ext) ATTR_NONNULL();
 bool BLI_ensure_extension(char *path, size_t maxlen, const char *ext) ATTR_NONNULL();
 bool BLI_ensure_filename(char *filepath, size_t maxlen, const char *filename) ATTR_NONNULL();
-void BLI_uniquename(struct ListBase *list, void *vlink, const char *defname, char delim, int name_offs, int len);
+bool BLI_uniquename(struct ListBase *list, void *vlink, const char *defname, char delim, int name_offs, int len);
 bool BLI_uniquename_cb(bool (*unique_check)(void *arg, const char *name),
                        void *arg, const char *defname, char delim, char *name, int name_len);
 void BLI_newname(char *name, int add);

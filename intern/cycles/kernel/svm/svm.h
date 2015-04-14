@@ -87,7 +87,7 @@ ccl_device_inline int stack_load_int(float *stack, uint a)
 	return __float_as_int(stack[a]);
 }
 
-ccl_device_inline float stack_load_int_default(float *stack, uint a, uint value)
+ccl_device_inline int stack_load_int_default(float *stack, uint a, uint value)
 {
 	return (a == (uint)SVM_STACK_INVALID)? (int)value: stack_load_int(stack, a);
 }
@@ -361,7 +361,7 @@ ccl_device_noinline void svm_eval_nodes(KernelGlobals *kg, ShaderData *sd, Shade
 				break;
 #ifdef __EXTRA_NODES__
 			case NODE_WIREFRAME:
-				svm_node_wireframe(kg, sd, stack, node.y, node.z, node.w);
+				svm_node_wireframe(kg, sd, stack, node);
 				break;
 			case NODE_WAVELENGTH:
 				svm_node_wavelength(sd, stack, node.y, node.z);

@@ -158,7 +158,7 @@ class VIEW3D_MT_editor_menus(Menu):
         if edit_object:
             layout.menu("VIEW3D_MT_edit_%s" % edit_object.type.lower())
         elif obj:
-            if mode_string not in {'PAINT_TEXTURE'}:
+            if mode_string != 'PAINT_TEXTURE':
                 layout.menu("VIEW3D_MT_%s" % mode_string.lower())
             if mode_string in {'SCULPT', 'PAINT_VERTEX', 'PAINT_WEIGHT', 'PAINT_TEXTURE'}:
                 layout.menu("VIEW3D_MT_brush")
@@ -446,6 +446,9 @@ class VIEW3D_MT_view_navigation(Menu):
         layout = self.layout
 
         layout.operator_enum("view3d.view_orbit", "type")
+        props = layout.operator("view3d.view_orbit", "Orbit Opposite")
+        props.type = 'ORBITRIGHT'
+        props.angle = pi
 
         layout.separator()
 
@@ -911,6 +914,41 @@ class VIEW3D_MT_select_paint_mask_vertex(Menu):
 
         layout.operator("paint.vert_select_ungrouped", text="Ungrouped Verts")
 
+
+class VIEW3D_MT_angle_control(Menu):
+    bl_label = "Angle Control"
+
+    @classmethod
+    def poll(cls, context):
+        settings = UnifiedPaintPanel.paint_settings(context)
+        if not settings:
+            return False
+
+        brush = settings.brush
+        tex_slot = brush.texture_slot
+
+        return tex_slot.has_texture_angle and tex_slot.has_texture_angle_source
+
+    def draw(self, context):
+        layout = self.layout
+
+        settings = UnifiedPaintPanel.paint_settings(context)
+        brush = settings.brush
+
+        sculpt = (context.sculpt_object != None)
+
+        tex_slot = brush.texture_slot
+
+        layout.prop(tex_slot, "use_rake", text="Rake")
+
+        if brush.brush_capabilities.has_random_texture_angle and tex_slot.has_random_texture_angle:
+            if sculpt:
+                if brush.sculpt_capabilities.has_random_texture_angle:
+                    layout.prop(tex_slot, "use_random", text="Random")
+            else:
+                layout.prop(tex_slot, "use_random", text="Random")
+
+
 # ********** Add menu **********
 
 # XXX: INFO_MT_ names used to keep backwards compatibility (Addons etc that hook into the menu)
@@ -1005,6 +1043,17 @@ class INFO_MT_armature_add(Menu):
         layout.operator("object.armature_add", text="Single Bone", icon='BONE_DATA')
 
 
+class INFO_MT_lamp_add(Menu):
+    bl_idname = "INFO_MT_lamp_add"
+    bl_label = "Lamp"
+
+    def draw(self, context):
+        layout = self.layout
+
+        layout.operator_context = 'INVOKE_REGION_WIN'
+        layout.operator_enum("object.lamp_add", "type")
+
+
 class INFO_MT_add(Menu):
     bl_label = "Add"
 
@@ -1037,7 +1086,7 @@ class INFO_MT_add(Menu):
         layout.separator()
 
         layout.operator("object.camera_add", text="Camera", icon='OUTLINER_OB_CAMERA')
-        layout.operator_menu_enum("object.lamp_add", "type", text="Lamp", icon='OUTLINER_OB_LAMP')
+        layout.menu("INFO_MT_lamp_add", icon='OUTLINER_OB_LAMP')
         layout.separator()
 
         layout.operator_menu_enum("object.effector_add", "type", text="Force Field", icon='OUTLINER_OB_EMPTY')
@@ -1895,6 +1944,10 @@ class VIEW3D_MT_pose_propagate(Menu):
 
         layout.separator()
 
+        layout.operator("pose.propagate", text="On Selected Keyframes").mode = 'SELECTED_KEYS'
+
+        layout.separator()
+
         layout.operator("pose.propagate", text="On Selected Markers").mode = 'SELECTED_MARKERS'
 
 
@@ -2218,7 +2271,8 @@ class VIEW3D_MT_edit_mesh_vertices(Menu):
         layout.operator("mesh.rip_edge_move")
         layout.operator("mesh.split")
         layout.operator_menu_enum("mesh.separate", "type")
-        layout.operator("mesh.vert_connect", text="Connect")
+        layout.operator("mesh.vert_connect_path", text="Connect Vertex Path")
+        layout.operator("mesh.vert_connect", text="Connect Vertices")
         layout.operator("transform.vert_slide", text="Slide")
 
         layout.separator()
@@ -2529,10 +2583,6 @@ class VIEW3D_MT_edit_font(Menu):
         layout.operator("font.style_toggle", text="Toggle Underline").style = 'UNDERLINE'
         layout.operator("font.style_toggle", text="Toggle Small Caps").style = 'SMALL_CAPS'
 
-        layout.separator()
-
-        layout.operator("font.insert_lorem")
-
 
 class VIEW3D_MT_edit_text_chars(Menu):
     bl_label = "Special Characters"
@@ -2671,6 +2721,7 @@ class VIEW3D_MT_edit_armature(Menu):
         layout.separator()
 
         layout.operator_context = 'EXEC_AREA'
+        layout.operator("armature.symmetrize")
         layout.operator("armature.autoside_names", text="AutoName Left/Right").type = 'XAXIS'
         layout.operator("armature.autoside_names", text="AutoName Front/Back").type = 'YAXIS'
         layout.operator("armature.autoside_names", text="AutoName Top/Bottom").type = 'ZAXIS'
@@ -2709,6 +2760,7 @@ class VIEW3D_MT_armature_specials(Menu):
         layout.operator("armature.autoside_names", text="AutoName Front/Back").type = 'YAXIS'
         layout.operator("armature.autoside_names", text="AutoName Top/Bottom").type = 'ZAXIS'
         layout.operator("armature.flip_names", text="Flip Names")
+        layout.operator("armature.symmetrize")
 
 
 class VIEW3D_MT_edit_armature_parent(Menu):
@@ -2895,16 +2947,50 @@ class VIEW3D_PT_view3d_display(Panel):
             row.prop(region, "use_box_clip")
 
 
-class VIEW3D_PT_view3d_shading(Panel):
+class VIEW3D_PT_view3d_stereo(Panel):
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
-    bl_label = "Shading"
+    bl_label = "Stereoscopy"
     bl_options = {'DEFAULT_CLOSED'}
 
     @classmethod
     def poll(cls, context):
+        scene = context.scene
+
+        multiview = scene.render.use_multiview
+        return context.space_data and multiview
+
+    def draw(self, context):
+        layout = self.layout
         view = context.space_data
-        return (view)
+
+        basic_stereo = context.scene.render.views_format == 'STEREO_3D'
+
+        col = layout.column()
+        col.row().prop(view, "stereo_3d_camera", expand=True)
+
+        col.label(text="Display:")
+        row = col.row()
+        row.active = basic_stereo
+        row.prop(view, "show_stereo_3d_cameras")
+        row = col.row()
+        row.active = basic_stereo
+        split = row.split()
+        split.prop(view, "show_stereo_3d_convergence_plane")
+        split = row.split()
+        split.prop(view, "stereo_3d_convergence_plane_alpha", text="Alpha")
+        split.active = view.show_stereo_3d_convergence_plane
+        row = col.row()
+        split = row.split()
+        split.prop(view, "show_stereo_3d_volume")
+        split = row.split()
+        split.prop(view, "stereo_3d_volume_alpha", text="Alpha")
+
+
+class VIEW3D_PT_view3d_shading(Panel):
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_label = "Shading"
 
     def draw(self, context):
         layout = self.layout
@@ -2929,8 +3015,28 @@ class VIEW3D_PT_view3d_shading(Panel):
                 col.prop(view, "show_textured_shadeless")
 
         col.prop(view, "show_backface_culling")
-        if obj and obj.mode == 'EDIT' and view.viewport_shade not in {'BOUNDBOX', 'WIREFRAME'}:
-            col.prop(view, "show_occlude_wire")
+
+        if view.viewport_shade not in {'BOUNDBOX', 'WIREFRAME'}:
+            if obj and obj.mode == 'EDIT':
+                col.prop(view, "show_occlude_wire")
+
+
+        fx_settings = view.fx_settings
+
+        sub = col.column()
+        sub.active = view.region_3d.view_perspective == 'CAMERA'
+        sub.prop(fx_settings, "use_dof")
+
+        if view.viewport_shade not in {'BOUNDBOX', 'WIREFRAME'}:
+            col.prop(fx_settings, "use_ssao", text="Ambient Occlusion")
+            if fx_settings.use_ssao:
+                ssao_settings = fx_settings.ssao
+                subcol = col.column(align=True)
+                subcol.prop(ssao_settings, "factor")
+                subcol.prop(ssao_settings, "distance_max")
+                subcol.prop(ssao_settings, "attenuation")
+                subcol.prop(ssao_settings, "samples")
+                subcol.prop(ssao_settings, "color")
 
 
 class VIEW3D_PT_view3d_motion_tracking(Panel):
@@ -3188,8 +3294,8 @@ class VIEW3D_PT_background_image(Panel):
 
                     row = box.row()
                     if bg.view_axis != 'CAMERA':
-                         row.prop(bg, "rotation")
-                         row.prop(bg, "size")
+                        row.prop(bg, "rotation")
+                        row.prop(bg, "size")
 
 
 class VIEW3D_PT_transform_orientations(Panel):

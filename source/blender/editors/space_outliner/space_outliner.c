@@ -41,7 +41,7 @@
 #include "BKE_context.h"
 #include "BKE_screen.h"
 #include "BKE_scene.h"
-#include "BKE_treehash.h"
+#include "BKE_outliner_treehash.h"
 
 #include "ED_space_api.h"
 #include "ED_screen.h"
@@ -388,11 +388,8 @@ static void outliner_main_area_listener(bScreen *UNUSED(sc), ScrArea *UNUSED(sa)
 			}
 			break;
 		case NC_GPENCIL:
-			switch (wmn->data) {
-				case ND_DATA:
-					ED_region_tag_redraw(ar);
-					break;
-			}
+			if (ELEM(wmn->action, NA_EDITED, NA_SELECTED))
+				ED_region_tag_redraw(ar);
 			break;
 	}
 	
@@ -467,7 +464,7 @@ static void outliner_free(SpaceLink *sl)
 		BLI_mempool_destroy(soutliner->treestore);
 	}
 	if (soutliner->treehash) {
-		BKE_treehash_free(soutliner->treehash);
+		BKE_outliner_treehash_free(soutliner->treehash);
 	}
 }
 

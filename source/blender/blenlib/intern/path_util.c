@@ -57,6 +57,8 @@
 #  include <shlobj.h>
 #  include "BLI_winstuff.h"
 #  include "MEM_guardedalloc.h"
+#else
+#  include "unistd.h"
 #endif /* WIN32 */
 
 /* local */
@@ -290,7 +292,7 @@ static bool uniquename_unique_check(void *arg, const char *name)
 
 /**
  * Ensures that the specified block has a unique name within the containing list,
- * incrementing its numeric suffix as necessary.
+ * incrementing its numeric suffix as necessary. Returns true if name had to be adjusted.
  *
  * \param list  List containing the block
  * \param vlink  The block to check the name for
@@ -299,7 +301,7 @@ static bool uniquename_unique_check(void *arg, const char *name)
  * \param name_offs  Offset of name within block structure
  * \param name_len  Maximum length of name area
  */
-void BLI_uniquename(ListBase *list, void *vlink, const char *defname, char delim, int name_offs, int name_len)
+bool BLI_uniquename(ListBase *list, void *vlink, const char *defname, char delim, int name_offs, int name_len)
 {
 	struct {ListBase *lb; void *vlink; int name_offs; } data;
 	data.lb = list;
@@ -310,9 +312,9 @@ void BLI_uniquename(ListBase *list, void *vlink, const char *defname, char delim
 
 	/* See if we are given an empty string */
 	if (ELEM(NULL, vlink, defname))
-		return;
+		return false;
 
-	BLI_uniquename_cb(uniquename_unique_check, &data, defname, delim, GIVE_STRADDR(vlink, name_offs), name_len);
+	return BLI_uniquename_cb(uniquename_unique_check, &data, defname, delim, GIVE_STRADDR(vlink, name_offs), name_len);
 }
 
 static int BLI_path_unc_prefix_len(const char *path); /* defined below in same file */
@@ -743,7 +745,7 @@ bool BLI_parent_dir(char *path)
 	BLI_cleanup_dir(NULL, tmp); /* does all the work of normalizing the path for us */
 
 	if (!BLI_testextensie(tmp, parent_dir)) {
-		BLI_strncpy(path, tmp, sizeof(tmp));
+		strcpy(path, tmp);  /* We assume pardir is always shorter... */
 		return true;
 	}
 	else {
@@ -1109,33 +1111,18 @@ void BLI_char_switch(char *string, char from, char to)
  */
 void BLI_make_exist(char *dir)
 {
-	int a;
-	char par_path[PATH_MAX + 3];
+	bool valid_path = true;
 
-	BLI_char_switch(dir, ALTSEP, SEP);
+	/* Loop as long as cur path is not a dir, and we can get a parent path. */
+	while ((BLI_access(dir, R_OK) != 0) && (valid_path = BLI_parent_dir(dir)));
 
-	a = strlen(dir);
-
-	for (BLI_join_dirfile(par_path, sizeof(par_path), dir, FILENAME_PARENT);
-	     !(BLI_is_dir(dir) && BLI_exists(par_path));
-	     BLI_join_dirfile(par_path, sizeof(par_path), dir, FILENAME_PARENT))
-	{
-		a--;
-		while (dir[a] != SEP) {
-			a--;
-			if (a <= 0) break;
-		}
-		if (a >= 0) {
-			dir[a + 1] = '\0';
-		}
-		else {
+	/* If we could not find an existing dir, use default root... */
+	if (!valid_path || !dir[0]) {
 #ifdef WIN32
-			get_default_root(dir);
+		get_default_root(dir);
 #else
-			strcpy(dir, "/");
+		strcpy(dir, "/");
 #endif
-			break;
-		}
 	}
 }
 

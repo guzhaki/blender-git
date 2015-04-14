@@ -50,6 +50,7 @@
 #include "BKE_main.h"
 #include "BKE_sequencer.h"
 #include "BKE_sound.h"
+#include "BKE_scene.h"
 
 #include "IMB_colormanagement.h"
 #include "IMB_imbuf.h"
@@ -860,7 +861,7 @@ void ED_sequencer_special_preview_clear(void)
 	sequencer_special_update_set(NULL);
 }
 
-ImBuf *sequencer_ibuf_get(struct Main *bmain, Scene *scene, SpaceSeq *sseq, int cfra, int frame_ofs)
+ImBuf *sequencer_ibuf_get(struct Main *bmain, Scene *scene, SpaceSeq *sseq, int cfra, int frame_ofs, const char *viewname)
 {
 	SeqRenderData context;
 	ImBuf *ibuf;
@@ -888,6 +889,7 @@ ImBuf *sequencer_ibuf_get(struct Main *bmain, Scene *scene, SpaceSeq *sseq, int 
 	        bmain->eval_ctx, bmain, scene,
 	        rectx, recty, proxy_size,
 	        &context);
+	context.view_id = BKE_scene_multiview_view_id_get(&scene->r, viewname);
 
 	/* sequencer could start rendering, in this case we need to be sure it wouldn't be canceled
 	 * by Esc pressed somewhere in the past
@@ -952,6 +954,32 @@ static ImBuf *sequencer_make_scope(Scene *scene, ImBuf *ibuf, ImBuf *(*make_scop
 	return scope;
 }
 
+static void sequencer_display_size(Scene *scene, SpaceSeq *sseq, float r_viewrect[2])
+{
+	float render_size, proxy_size;
+
+	if (sseq->render_size == SEQ_PROXY_RENDER_SIZE_SCENE) {
+		render_size = (float)scene->r.size / 100.0f;
+		proxy_size = 1.0f;
+	}
+	else {
+		render_size = (float)sseq->render_size / 100.0f;
+		proxy_size = render_size;
+	}
+
+	r_viewrect[0] = (render_size * (float)scene->r.xsch);
+	r_viewrect[1] = (render_size * (float)scene->r.ysch);
+
+	/* rectx = viewrectx + 0.5f; */ /* UNUSED */
+	/* recty = viewrecty + 0.5f; */ /* UNUSED */
+
+	if (sseq->mainb == SEQ_DRAW_IMG_IMBUF) {
+		r_viewrect[0] *= scene->r.xasp / scene->r.yasp;
+		r_viewrect[0] /= proxy_size;
+		r_viewrect[1] /= proxy_size;
+	}
+}
+
 void draw_image_seq(const bContext *C, Scene *scene, ARegion *ar, SpaceSeq *sseq, int cfra, int frame_ofs, bool draw_overlay, bool draw_backdrop)
 {
 	struct Main *bmain = CTX_data_main(C);
@@ -959,9 +987,7 @@ void draw_image_seq(const bContext *C, Scene *scene, ARegion *ar, SpaceSeq *sseq
 	struct ImBuf *scope = NULL;
 	struct View2D *v2d = &ar->v2d;
 	/* int rectx, recty; */ /* UNUSED */
-	float viewrectx, viewrecty;
-	float render_size = 0.0;
-	float proxy_size = 100.0;
+	float viewrect[2];
 	float col[3];
 	GLuint texid;
 	GLuint last_texid;
@@ -970,6 +996,7 @@ void draw_image_seq(const bContext *C, Scene *scene, ARegion *ar, SpaceSeq *sseq
 	const bool is_imbuf = ED_space_sequencer_check_show_imbuf(sseq);
 	int format, type;
 	bool glsl_used = false;
+	const char *names[2] = {STEREO_LEFT_NAME, STEREO_RIGHT_NAME};
 
 	if (G.is_rendering == false && (scene->r.seq_flag & R_SEQ_GL_PREV) == 0) {
 		/* stop all running jobs, except screen one. currently previews frustrate Render
@@ -985,29 +1012,6 @@ void draw_image_seq(const bContext *C, Scene *scene, ARegion *ar, SpaceSeq *sseq
 		}
 	}
 
-	render_size = sseq->render_size;
-	if (render_size == 0) {
-		render_size = scene->r.size;
-	}
-	else {
-		proxy_size = render_size;
-	}
-	if (render_size < 0) {
-		return;
-	}
-
-	viewrectx = (render_size * (float)scene->r.xsch) / 100.0f;
-	viewrecty = (render_size * (float)scene->r.ysch) / 100.0f;
-
-	/* rectx = viewrectx + 0.5f; */ /* UNUSED */
-	/* recty = viewrecty + 0.5f; */ /* UNUSED */
-
-	if (sseq->mainb == SEQ_DRAW_IMG_IMBUF) {
-		viewrectx *= scene->r.xasp / scene->r.yasp;
-		viewrectx /= proxy_size / 100.0f;
-		viewrecty /= proxy_size / 100.0f;
-	}
-
 	if ((!draw_overlay || sseq->overlay_type == SEQ_DRAW_OVERLAY_REFERENCE) && !draw_backdrop) {
 		UI_GetThemeColor3fv(TH_SEQ_PREVIEW, col);
 		glClearColor(col[0], col[1], col[2], 0.0);
@@ -1018,13 +1022,20 @@ void draw_image_seq(const bContext *C, Scene *scene, ARegion *ar, SpaceSeq *sseq
 	if (G.is_rendering)
 		return;
 
-	ibuf = sequencer_ibuf_get(bmain, scene, sseq, cfra, frame_ofs);
-	
+	if (sseq->render_size == SEQ_PROXY_RENDER_SIZE_NONE) {
+		return;
+	}
+
+	/* for now we only support Left/Right */
+	ibuf = sequencer_ibuf_get(bmain, scene, sseq, cfra, frame_ofs, names[sseq->multiview_eye]);
+
 	if (ibuf == NULL)
 		return;
 
 	if (ibuf->rect == NULL && ibuf->rect_float == NULL)
 		return;
+
+	sequencer_display_size(scene, sseq, viewrect);
 
 	if (sseq->mainb != SEQ_DRAW_IMG_IMBUF || sseq->zebra != 0) {
 		SequencerScopes *scopes = &sseq->scopes;
@@ -1072,8 +1083,13 @@ void draw_image_seq(const bContext *C, Scene *scene, ARegion *ar, SpaceSeq *sseq
 		/* future files may have new scopes we don't catch above */
 		if (scope) {
 			scopes->reference_ibuf = ibuf;
-			viewrectx = scope->x;
-			viewrecty = scope->y;
+			if (sseq->mainb == SEQ_DRAW_IMG_IMBUF) {
+				/* scopes drawn in image preview use viewrect from orig ibuf - currently that's only zebra */
+			}
+			else {
+				viewrect[0] = scope->x;
+				viewrect[1] = scope->y;
+			}
 		}
 		else {
 			scopes->reference_ibuf = NULL;
@@ -1084,7 +1100,7 @@ void draw_image_seq(const bContext *C, Scene *scene, ARegion *ar, SpaceSeq *sseq
 	glColor4ub(255, 255, 255, 255);
 
 	if (!draw_backdrop) {
-		UI_view2d_totRect_set(v2d, viewrectx + 0.5f, viewrecty + 0.5f);
+		UI_view2d_totRect_set(v2d, viewrect[0] + 0.5f, viewrect[1] + 0.5f);
 		UI_view2d_curRect_validate(v2d);
 		
 		/* setting up the view - actual drawing starts here */
@@ -1223,7 +1239,7 @@ void draw_image_seq(const bContext *C, Scene *scene, ARegion *ar, SpaceSeq *sseq
 	}
 	else if (draw_backdrop) {
 		float aspect = BLI_rcti_size_x(&ar->winrct) / (float)BLI_rcti_size_y(&ar->winrct);	
-		float image_aspect = viewrectx / viewrecty;
+		float image_aspect = viewrect[0] / viewrect[1];
 		float imagex, imagey;
 		
 		if (aspect >= image_aspect) {

@@ -35,9 +35,7 @@
 struct ViewDepths;
 struct Object;
 struct Image;
-struct Tex;
 struct SpaceLink;
-struct Base;
 struct BoundBox;
 struct MovieClip;
 struct MovieClipUser;
@@ -46,6 +44,7 @@ struct bGPdata;
 struct SmoothView3DStore;
 struct wmTimer;
 struct Material;
+struct GPUFX;
 
 /* This is needed to not let VC choke on near and far... old
  * proprietary MS extensions... */
@@ -60,6 +59,7 @@ struct Material;
 #include "DNA_listBase.h"
 #include "DNA_image_types.h"
 #include "DNA_movieclip_types.h"
+#include "DNA_gpu_types.h"
 
 /* ******************************** */
 
@@ -146,6 +146,7 @@ typedef struct RegionView3D {
 	float rot_angle;
 	float rot_axis[3];
 
+	struct GPUFX *compositor;
 } RegionView3D;
 
 /* 3D ViewPort Struct */
@@ -210,10 +211,18 @@ typedef struct View3D {
 	struct ListBase afterdraw_transp;
 	struct ListBase afterdraw_xray;
 	struct ListBase afterdraw_xraytransp;
-	
+
 	/* drawflags, denoting state */
 	char zbuf, transp, xray;
-	char pad3[5];
+
+	char multiview_eye;				/* multiview current eye - for internal use */
+
+	/* built-in shader effects (eGPUFXFlags) */
+	char pad3[4];
+
+	/* note, 'fx_settings.dof' is currently _not_ allocated,
+	 * instead set (temporarily) from camera */
+	struct GPUFXSettings fx_settings;
 
 	void *properties_storage;		/* Nkey panel stores stuff here (runtime only!) */
 	struct Material *defmaterial;	/* used by matcap now */
@@ -221,8 +230,20 @@ typedef struct View3D {
 	/* XXX deprecated? */
 	struct bGPdata *gpd  DNA_DEPRECATED;		/* Grease-Pencil Data (annotation layers) */
 
+	 /* multiview - stereo 3d */
+	short stereo3d_flag;
+	char stereo3d_camera;
+	char pad4;
+	float stereo3d_convergence_factor;
+	float stereo3d_volume_alpha;
+	float stereo3d_convergence_alpha;
 } View3D;
 
+
+/* View3D->stereo_flag (short) */
+#define V3D_S3D_DISPCAMERAS		(1 << 0)
+#define V3D_S3D_DISPPLANE		(1 << 1)
+#define V3D_S3D_DISPVOLUME		(1 << 2)
 
 /* View3D->flag (short) */
 /*#define V3D_DISPIMAGE		1*/ /*UNUSED*/

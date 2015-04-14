@@ -50,28 +50,21 @@
 struct ID;
 struct Text;
 struct Script;
-struct bSound;
-struct ImBuf;
 struct Image;
 struct Scopes;
 struct Histogram;
 struct SpaceIpo;
-struct BlendHandle;
 struct bNodeTree;
-struct uiBlock;
 struct FileList;
 struct bGPdata;
 struct bDopeSheet;
 struct FileSelectParams;
 struct FileLayout;
-struct bScreen;
-struct Scene;
 struct wmOperator;
 struct wmTimer;
 struct MovieClip;
 struct MovieClipScopes;
 struct Mask;
-struct GHash;
 struct BLI_mempool;
 
 
@@ -292,6 +285,7 @@ typedef enum eSpaceOutliner_Mode {
 	SO_DATABLOCKS = 11,
 	SO_USERDEF = 12,
 	/* SO_KEYMAP = 13, */        /* deprecated! */
+	SO_ID_ORPHANS = 14,
 } eSpaceOutliner_Mode;
 
 /* SpaceOops->storeflag */
@@ -370,8 +364,6 @@ typedef enum eGraphEdit_Flag {
 	/* normalize curves on display */
 	SIPO_NORMALIZE            = (1 << 14),
 	SIPO_NORMALIZE_FREEZE     = (1 << 15),
-	/* automatically set view on selection */
-	SIPO_AUTO_VIEW_SELECTED   = (1 << 16),
 } eGraphEdit_Flag;
 
 /* SpaceIpo->mode (Graph Editor Mode) */
@@ -495,7 +487,7 @@ typedef struct SpaceSeq {
 	
 	float xof DNA_DEPRECATED, yof DNA_DEPRECATED;   /* deprecated: offset for drawing the image preview */
 	short mainb;    /* weird name for the sequencer subtype (seq, image, luma... etc) */
-	short render_size;
+	short render_size;  /* eSpaceSeq_Proxy_RenderSize */
 	short chanshown;
 	short zebra;
 	int flag;
@@ -508,6 +500,9 @@ typedef struct SpaceSeq {
 	struct bGPdata *gpd;        /* grease-pencil data */
 
 	struct SequencerScopes scopes;  /* different scoped displayed in space */
+
+	char multiview_eye;				/* multiview current eye - for internal use */
+	char pad2[7];
 } SpaceSeq;
 
 
@@ -559,8 +554,7 @@ typedef enum eSpaceSeq_Proxy_RenderSize {
 	SEQ_PROXY_RENDER_SIZE_FULL      = 100
 } eSpaceSeq_Proxy_RenderSize;
 
-typedef struct MaskSpaceInfo
-{
+typedef struct MaskSpaceInfo {
 	/* **** mask editing **** */
 	struct Mask *mask;
 	/* draw options */
@@ -638,9 +632,19 @@ typedef struct SpaceFile {
 	struct FileLayout *layout;
 	
 	short recentnr, bookmarknr;
-	short systemnr, pad2;
+	short systemnr, system_bookmarknr;
 } SpaceFile;
 
+/* FSMenuEntry's without paths indicate seperators */
+typedef struct FSMenuEntry {
+	struct FSMenuEntry *next;
+
+	char *path;
+	char name[256];  /* FILE_MAXFILE */
+	short save;
+	short valid;
+	short pad[2];
+} FSMenuEntry;
 
 /* FileSelectParams.display */
 enum FileDisplayTypeE {
@@ -708,7 +712,7 @@ typedef enum eFileSel_File_Types {
 	FILE_TYPE_FTFONT            = (1 << 7),
 	FILE_TYPE_SOUND             = (1 << 8),
 	FILE_TYPE_TEXT              = (1 << 9),
-	FILE_TYPE_MOVIE_ICON        = (1 << 10), /* movie file that preview can't load */
+	/* 1 << 10 was FILE_TYPE_MOVIE_ICON, got rid of this so free slot for future type... */
 	FILE_TYPE_FOLDER            = (1 << 11), /* represents folders for filtering */
 	FILE_TYPE_BTX               = (1 << 12),
 	FILE_TYPE_COLLADA           = (1 << 13),

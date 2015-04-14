@@ -180,8 +180,6 @@ static void seq_proxy_build_job(const bContext *C)
 	Scene *scene = CTX_data_scene(C);
 	Editing *ed = BKE_sequencer_editing_get(scene, false);
 	ScrArea *sa = CTX_wm_area(C);
-	struct SeqIndexBuildContext *context;
-	LinkData *link;
 	Sequence *seq;
 	GSet *file_list;
 	
@@ -209,9 +207,7 @@ static void seq_proxy_build_job(const bContext *C)
 	SEQP_BEGIN (ed, seq)
 	{
 		if ((seq->flag & SELECT)) {
-			context = BKE_sequencer_proxy_rebuild_context(pj->main, pj->scene, seq, file_list);
-			link = BLI_genericNodeN(context);
-			BLI_addtail(&pj->queue, link);
+			BKE_sequencer_proxy_rebuild_context(pj->main, pj->scene, seq, file_list, &pj->queue);
 		}
 	}
 	SEQ_END
@@ -1598,6 +1594,8 @@ static int sequencer_slip_modal(bContext *C, wmOperator *op, const wmEvent *even
 		}
 
 		case LEFTMOUSE:
+		case RETKEY:
+		case SPACEKEY:
 		{
 			ED_region_draw_cb_exit(ar->type, data->draw_handle);
 			MEM_freeN(data->seq_array);
@@ -3163,7 +3161,7 @@ static void seq_copy_del_sound(Scene *scene, Sequence *seq)
 		}
 	}
 	else if (seq->scene_sound) {
-		sound_remove_scene_sound(scene, seq->scene_sound);
+		BKE_sound_remove_scene_sound(scene, seq->scene_sound);
 		seq->scene_sound = NULL;
 	}
 }
@@ -3320,10 +3318,10 @@ static int sequencer_swap_data_exec(bContext *C, wmOperator *op)
 	}
 
 	if (seq_act->scene_sound)
-		sound_remove_scene_sound(scene, seq_act->scene_sound);
+		BKE_sound_remove_scene_sound(scene, seq_act->scene_sound);
 
 	if (seq_other->scene_sound)
-		sound_remove_scene_sound(scene, seq_other->scene_sound);
+		BKE_sound_remove_scene_sound(scene, seq_other->scene_sound);
 
 	seq_act->scene_sound = NULL;
 	seq_other->scene_sound = NULL;
@@ -3331,8 +3329,8 @@ static int sequencer_swap_data_exec(bContext *C, wmOperator *op)
 	BKE_sequence_calc(scene, seq_act);
 	BKE_sequence_calc(scene, seq_other);
 
-	if (seq_act->sound) sound_add_scene_sound_defaults(scene, seq_act);
-	if (seq_other->sound) sound_add_scene_sound_defaults(scene, seq_other);
+	if (seq_act->sound) BKE_sound_add_scene_sound_defaults(scene, seq_act);
+	if (seq_other->sound) BKE_sound_add_scene_sound_defaults(scene, seq_other);
 
 	WM_event_add_notifier(C, NC_SCENE | ND_SEQUENCER, scene);
 
@@ -3440,12 +3438,18 @@ static int sequencer_rebuild_proxy_exec(bContext *C, wmOperator *UNUSED(op))
 	SEQP_BEGIN(ed, seq)
 	{
 		if ((seq->flag & SELECT)) {
-			struct SeqIndexBuildContext *context;
+			ListBase queue = {NULL, NULL};
+			LinkData *link;
 			short stop = 0, do_update;
 			float progress;
-			context = BKE_sequencer_proxy_rebuild_context(bmain, scene, seq, file_list);
-			BKE_sequencer_proxy_rebuild(context, &stop, &do_update, &progress);
-			BKE_sequencer_proxy_rebuild_finish(context, 0);
+
+			BKE_sequencer_proxy_rebuild_context(bmain, scene, seq, file_list, &queue);
+
+			for (link = queue.first; link; link = link->next) {
+				struct SeqIndexBuildContext *context = link->data;
+				BKE_sequencer_proxy_rebuild(context, &stop, &do_update, &progress);
+				BKE_sequencer_proxy_rebuild_finish(context, 0);
+			}
 			BKE_sequencer_free_imbuf(scene, &ed->seqbase, false);
 		}
 	}
@@ -3497,7 +3501,10 @@ static int sequencer_enable_proxies_exec(bContext *C, wmOperator *op)
 		if ((seq->flag & SELECT)) {
 			if (ELEM(seq->type, SEQ_TYPE_MOVIE, SEQ_TYPE_IMAGE, SEQ_TYPE_META, SEQ_TYPE_SCENE, SEQ_TYPE_MULTICAM)) {
 				BKE_sequencer_proxy_set(seq, turnon);
-				
+				if (seq->strip->proxy == NULL) {
+					continue;
+				}
+
 				if (proxy_25)
 					seq->strip->proxy->build_size_flags |= SEQ_PROXY_IMAGE_SIZE_25;
 				else 

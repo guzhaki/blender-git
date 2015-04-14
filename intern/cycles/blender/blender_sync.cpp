@@ -30,6 +30,7 @@
 #include "device.h"
 
 #include "blender_sync.h"
+#include "blender_session.h"
 #include "blender_util.h"
 
 #include "util_debug.h"
@@ -110,7 +111,7 @@ bool BlenderSync::sync_recalc()
 		
 		if(b_ob->is_updated_data()) {
 			BL::Object::particle_systems_iterator b_psys;
-			for (b_ob->particle_systems.begin(b_psys); b_psys != b_ob->particle_systems.end(); ++b_psys)
+			for(b_ob->particle_systems.begin(b_psys); b_psys != b_ob->particle_systems.end(); ++b_psys)
 				particle_system_map.set_recalc(*b_ob);
 		}
 	}
@@ -149,6 +150,7 @@ void BlenderSync::sync_data(BL::SpaceView3D b_v3d, BL::Object b_override, void *
 	sync_integrator();
 	sync_film();
 	sync_shaders();
+	sync_images();
 	sync_curve_settings();
 
 	mesh_synced.clear(); /* use for objects and motion sync */
@@ -359,6 +361,39 @@ void BlenderSync::sync_render_layers(BL::SpaceView3D b_v3d, const char *layer)
 	}
 }
 
+/* Images */
+void BlenderSync::sync_images()
+{
+	/* Sync is a convention for this API, but currently it frees unused buffers. */
+
+	const bool is_interface_locked = b_engine.render() &&
+	                                 b_engine.render().use_lock_interface();
+	if(is_interface_locked == false && BlenderSession::headless == false) {
+		/* If interface is not locked, it's possible image is needed for
+		 * the display.
+		 */
+		return;
+	}
+	/* Free buffers used by images which are not needed for render. */
+	BL::BlendData::images_iterator b_image;
+	for(b_data.images.begin(b_image);
+	    b_image != b_data.images.end();
+	    ++b_image)
+	{
+		/* TODO(sergey): Consider making it an utility function to check
+		 * whether image is considered builtin.
+		 */
+		const bool is_builtin = b_image->packed_file() ||
+		                        b_image->source() == BL::Image::source_GENERATED ||
+		                        b_image->source() == BL::Image::source_MOVIE ||
+		                        b_engine.is_preview();
+		if(is_builtin == false) {
+			b_image->buffers_free();
+		}
+		/* TODO(sergey): Free builtin images not used by any shader. */
+	}
+}
+
 /* Scene Parameters */
 
 SceneParams BlenderSync::get_scene_params(BL::Scene b_scene, bool background, bool is_cpu)
@@ -407,7 +442,10 @@ bool BlenderSync::get_session_pause(BL::Scene b_scene, bool background)
 	return (background)? false: get_boolean(cscene, "preview_pause");
 }
 
-SessionParams BlenderSync::get_session_params(BL::RenderEngine b_engine, BL::UserPreferences b_userpref, BL::Scene b_scene, bool background)
+SessionParams BlenderSync::get_session_params(BL::RenderEngine b_engine,
+                                              BL::UserPreferences b_userpref,
+                                              BL::Scene b_scene,
+                                              bool background)
 {
 	SessionParams params;
 	PointerRNA cscene = RNA_pointer_get(&b_scene.ptr, "cycles");
@@ -496,8 +534,13 @@ SessionParams BlenderSync::get_session_params(BL::RenderEngine b_engine, BL::Use
 
 		params.tile_size = make_int2(tile_x, tile_y);
 	}
-	
-	params.tile_order = (TileOrder)RNA_enum_get(&cscene, "tile_order");
+
+	if(BlenderSession::headless == false) {
+		params.tile_order = (TileOrder)RNA_enum_get(&cscene, "tile_order");
+	}
+	else {
+		params.tile_order = TILE_BOTTOM_TO_TOP;
+	}
 
 	params.start_resolution = get_int(cscene, "preview_start_resolution");
 
@@ -543,6 +586,13 @@ SessionParams BlenderSync::get_session_params(BL::RenderEngine b_engine, BL::Use
 	{
 		params.display_buffer_linear = GLEW_ARB_half_float_pixel &&
 		                               b_engine.support_display_space_shader(b_scene);
+	}
+
+	if(b_engine.is_preview()) {
+		/* For preview rendering we're using same timeout as
+		 * blender's job update.
+		 */
+		params.progressive_update_timeout = 0.1;
 	}
 
 	return params;

@@ -72,7 +72,8 @@
  */
 bool BM_vert_dissolve(BMesh *bm, BMVert *v)
 {
-	const int len = BM_vert_edge_count(v);
+	/* logic for 3 or more is identical */
+	const int len = BM_vert_edge_count_ex(v, 3);
 	
 	if (len == 1) {
 		BM_vert_kill(bm, v); /* will kill edges too */
@@ -97,7 +98,7 @@ bool BM_vert_dissolve(BMesh *bm, BMVert *v)
 			return false;
 		}
 	}
-	else if (len == 2 && BM_vert_face_count(v) == 1) {
+	else if (len == 2 && BM_vert_face_count_is_equal(v, 1)) {
 		/* boundary vertex on a face */
 		return (BM_vert_collapse_edge(bm, v->e, v, true, true) != NULL);
 	}
@@ -902,7 +903,9 @@ bool BM_face_split_edgenet(
 							if (l_first == NULL) {
 								mul_v2_m3v3(co, axis_mat, v->co);
 								interp_weights_poly_v2(w, cos_2d, f->len, co);
-								CustomData_bmesh_interp(&bm->ldata, blocks, w, NULL, f->len, l_iter->head.data);
+								CustomData_bmesh_interp(
+								        &bm->ldata, (const void **)blocks,
+								        w, NULL, f->len, l_iter->head.data);
 								l_first = l_iter;
 							}
 							else {
@@ -1010,7 +1013,7 @@ BMEdge *BM_vert_collapse_faces(BMesh *bm, BMEdge *e_kill, BMVert *v_kill, float 
 		l_iter = e_kill->l;
 		do {
 			if (l_iter->v == tv && l_iter->next->v == v_kill) {
-				void *src[2];
+				const void *src[2];
 				BMLoop *tvloop = l_iter;
 				BMLoop *kvloop = l_iter->next;
 

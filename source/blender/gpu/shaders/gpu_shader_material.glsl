@@ -698,22 +698,7 @@ void mix_linear(float fac, vec4 col1, vec4 col2, out vec4 outcol)
 {
 	fac = clamp(fac, 0.0, 1.0);
 
-	outcol = col1;
-
-	if(col2.r > 0.5)
-		outcol.r= col1.r + fac*(2.0*(col2.r - 0.5));
-	else
-		outcol.r= col1.r + fac*(2.0*(col2.r) - 1.0);
-
-	if(col2.g > 0.5)
-		outcol.g= col1.g + fac*(2.0*(col2.g - 0.5));
-	else
-		outcol.g= col1.g + fac*(2.0*(col2.g) - 1.0);
-
-	if(col2.b > 0.5)
-		outcol.b= col1.b + fac*(2.0*(col2.b - 0.5));
-	else
-		outcol.b= col1.b + fac*(2.0*(col2.b) - 1.0);
+	outcol = col1 + fac*(2.0*(col2 - vec4(0.5)));
 }
 
 void valtorgb(float fac, sampler2D colormap, out vec4 outcol, out float outalpha)
@@ -2114,18 +2099,23 @@ void shade_exposure_correct(vec3 col, float linfac, float logfac, out vec3 outco
 	outcol = linfac*(1.0 - exp(col*logfac));
 }
 
-void shade_mist_factor(vec3 co, float miststa, float mistdist, float misttype, float misi, out float outfac)
+void shade_mist_factor(vec3 co, float enable, float miststa, float mistdist, float misttype, float misi, out float outfac)
 {
-	float fac, zcor;
+	if(enable == 1.0) {
+		float fac, zcor;
 
-	zcor = (gl_ProjectionMatrix[3][3] == 0.0)? length(co): -co[2];
-	
-	fac = clamp((zcor-miststa)/mistdist, 0.0, 1.0);
-	if(misttype == 0.0) fac *= fac;
-	else if(misttype == 1.0);
-	else fac = sqrt(fac);
+		zcor = (gl_ProjectionMatrix[3][3] == 0.0)? length(co): -co[2];
+		
+		fac = clamp((zcor - miststa) / mistdist, 0.0, 1.0);
+		if(misttype == 0.0) fac *= fac;
+		else if(misttype == 1.0);
+		else fac = sqrt(fac);
 
-	outfac = 1.0 - (1.0-fac)*(1.0-misi);
+		outfac = 1.0 - (1.0 - fac) * (1.0 - misi);
+	}
+	else {
+		outfac = 0.0;
+	}
 }
 
 void shade_world_mix(vec3 hor, vec4 col, out vec4 outcol)
@@ -2357,7 +2347,7 @@ void node_uvmap(vec3 attr_uv, out vec3 outvec)
 void node_geometry(vec3 I, vec3 N, mat4 toworld,
 	out vec3 position, out vec3 normal, out vec3 tangent,
 	out vec3 true_normal, out vec3 incoming, out vec3 parametric,
-	out float backfacing)
+	out float backfacing, out float pointiness)
 {
 	position = (toworld*vec4(I, 1.0)).xyz;
 	normal = (toworld*vec4(N, 0.0)).xyz;
@@ -2370,6 +2360,7 @@ void node_geometry(vec3 I, vec3 N, mat4 toworld,
 
 	parametric = vec3(0.0);
 	backfacing = (gl_FrontFacing)? 0.0: 1.0;
+	pointiness = 0.0;
 }
 
 void node_tex_coord(vec3 I, vec3 N, mat4 viewinvmat, mat4 obinvmat, vec4 camerafac,

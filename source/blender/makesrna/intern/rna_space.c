@@ -31,9 +31,11 @@
 
 #include "BLF_translation.h"
 
+#include "BKE_image.h"
 #include "BKE_key.h"
 #include "BKE_movieclip.h"
 #include "BKE_node.h"
+#include "BKE_screen.h"
 
 #include "DNA_action_types.h"
 #include "DNA_key_types.h"
@@ -55,6 +57,8 @@
 
 #include "RE_engine.h"
 #include "RE_pipeline.h"
+
+#include "ED_fileselect.h"
 
 #include "RNA_enum_types.h"
 
@@ -86,6 +90,41 @@ EnumPropertyItem space_type_items[] = {
 	{SPACE_CONSOLE, "CONSOLE", ICON_CONSOLE, "Python Console", "Interactive programmatic console for advanced editing and script development"},
 	{0, NULL, 0, NULL, NULL}
 };
+
+#define V3D_S3D_CAMERA_LEFT        {STEREO_LEFT_ID, "LEFT", ICON_RESTRICT_RENDER_OFF, "Left", ""},
+#define V3D_S3D_CAMERA_RIGHT       {STEREO_RIGHT_ID, "RIGHT", ICON_RESTRICT_RENDER_OFF, "Right", ""},
+#define V3D_S3D_CAMERA_S3D         {STEREO_3D_ID, "S3D", ICON_CAMERA_STEREO, "3D", ""},
+#ifdef RNA_RUNTIME
+#define V3D_S3D_CAMERA_VIEWS       {STEREO_MONO_ID, "MONO", ICON_RESTRICT_RENDER_OFF, "Views", ""},
+#endif
+
+static EnumPropertyItem stereo3d_camera_items[] = {
+	V3D_S3D_CAMERA_LEFT
+	V3D_S3D_CAMERA_RIGHT
+	V3D_S3D_CAMERA_S3D
+	{0, NULL, 0, NULL, NULL}
+};
+
+#ifdef RNA_RUNTIME
+static EnumPropertyItem multiview_camera_items[] = {
+	V3D_S3D_CAMERA_VIEWS
+	V3D_S3D_CAMERA_S3D
+	{0, NULL, 0, NULL, NULL}
+};
+#endif
+
+#undef V3D_S3D_CAMERA_LEFT
+#undef V3D_S3D_CAMERA_RIGHT
+#undef V3D_S3D_CAMERA_S3D
+#undef V3D_S3D_CAMERA_VIEWS
+
+#ifndef RNA_RUNTIME
+static EnumPropertyItem stereo3d_eye_items[] = {
+    {STEREO_LEFT_ID, "LEFT_EYE", ICON_NONE, "Left Eye"},
+    {STEREO_RIGHT_ID, "RIGHT_EYE", ICON_NONE, "Right Eye"},
+    {0, NULL, 0, NULL, NULL}
+};
+#endif
 
 static EnumPropertyItem pivot_items_full[] = {
 	{V3D_CENTER, "BOUNDING_BOX_CENTER", ICON_ROTATE, "Bounding Box Center",
@@ -204,6 +243,7 @@ static EnumPropertyItem buttons_texture_context_items[] = {
 #include "BKE_icons.h"
 
 #include "ED_buttons.h"
+#include "ED_fileselect.h"
 #include "ED_image.h"
 #include "ED_node.h"
 #include "ED_screen.h"
@@ -409,8 +449,8 @@ static void rna_SpaceView3D_lock_camera_and_layers_set(PointerRNA *ptr, int valu
 		/* seek for layact */
 		bit = 0;
 		while (bit < 32) {
-			if (v3d->lay & (1 << bit)) {
-				v3d->layact = 1 << bit;
+			if (v3d->lay & (1u << bit)) {
+				v3d->layact = (1u << bit);
 				break;
 			}
 			bit++;
@@ -489,8 +529,11 @@ static void rna_SpaceView3D_matcap_enable(Main *UNUSED(bmain), Scene *UNUSED(sce
 {
 	View3D *v3d = (View3D *)(ptr->data);
 	
-	if (v3d->matcap_icon == 0)
+	if (v3d->matcap_icon < ICON_MATCAP_01 ||
+	    v3d->matcap_icon > ICON_MATCAP_24)
+	{
 		v3d->matcap_icon = ICON_MATCAP_01;
+	}
 }
 
 static void rna_SpaceView3D_pivot_update(Main *bmain, Scene *UNUSED(scene), PointerRNA *ptr)
@@ -652,6 +695,17 @@ static EnumPropertyItem *rna_SpaceView3D_viewport_shade_itemf(bContext *UNUSED(C
 	return item;
 }
 
+static EnumPropertyItem *rna_SpaceView3D_stereo3d_camera_itemf(bContext *UNUSED(C), PointerRNA *ptr,
+                                                               PropertyRNA *UNUSED(prop), bool *UNUSED(r_free))
+{
+	Scene *scene = ((bScreen *)ptr->id.data)->scene;
+
+	if (scene->r.views_format == SCE_VIEWS_FORMAT_MULTIVIEW)
+		return multiview_camera_items;
+	else
+		return stereo3d_camera_items;
+}
+
 /* Space Image Editor */
 
 static PointerRNA rna_SpaceImageEditor_uvedit_get(PointerRNA *ptr)
@@ -662,6 +716,38 @@ static PointerRNA rna_SpaceImageEditor_uvedit_get(PointerRNA *ptr)
 static void rna_SpaceImageEditor_mode_update(Main *bmain, Scene *scene, PointerRNA *UNUSED(ptr))
 {
 	ED_space_image_paint_update(bmain->wm.first, scene->toolsettings);
+}
+
+
+static void rna_SpaceImageEditor_show_stereo_set(PointerRNA *ptr, int value)
+{
+	SpaceImage *sima = (SpaceImage *)(ptr->data);
+
+	if (value)
+		sima->iuser.flag |= IMA_SHOW_STEREO;
+	else
+		sima->iuser.flag &= ~IMA_SHOW_STEREO;
+}
+
+static int rna_SpaceImageEditor_show_stereo_get(PointerRNA *ptr)
+{
+	SpaceImage *sima = (SpaceImage *)(ptr->data);
+	return (sima->iuser.flag & IMA_SHOW_STEREO) != 0;
+}
+
+static void rna_SpaceImageEditor_show_stereo_update(Main *UNUSED(bmain), Scene *UNUSED(unused), PointerRNA *ptr)
+{
+	SpaceImage *sima = (SpaceImage *)(ptr->data);
+	Image *ima = sima->image;
+
+	if (ima) {
+		if (ima->rr) {
+			BKE_image_multilayer_index(ima->rr, &sima->iuser);
+		}
+		else {
+			BKE_image_multiview_index(ima, &sima->iuser);
+		}
+	}
 }
 
 static int rna_SpaceImageEditor_show_render_get(PointerRNA *ptr)
@@ -788,6 +874,24 @@ static void rna_SpaceImageEditor_cursor_location_set(PointerRNA *ptr, const floa
 		
 		sima->cursor[0] = values[0] / w;
 		sima->cursor[1] = values[1] / h;
+	}
+}
+
+static void rna_SpaceImageEditor_image_update(Main *UNUSED(bmain), Scene *UNUSED(scene), PointerRNA *ptr)
+{
+	SpaceImage *sima = (SpaceImage *)ptr->data;
+	Image *ima = sima->image;
+
+	/* make sure all the iuser settings are valid for the sima image */
+	if (ima) {
+		if (ima->rr) {
+			if (BKE_image_multilayer_index(sima->image->rr, &sima->iuser) == NULL) {
+				BKE_image_init_imageuser(sima->image, &sima->iuser);
+			}
+		}
+		else {
+			BKE_image_multiview_index(ima, &sima->iuser);
+		}
 	}
 }
 
@@ -1110,12 +1214,12 @@ static void rna_SpaceDopeSheetEditor_action_update(Main *UNUSED(bmain), Scene *s
 		
 		if (saction->mode == SACTCONT_ACTION) {
 			/* TODO: context selector could help decide this with more control? */
-			adt = BKE_id_add_animdata(&obact->id); /* this only adds if non-existent */
+			adt = BKE_animdata_add_id(&obact->id); /* this only adds if non-existent */
 		}
 		else if (saction->mode == SACTCONT_SHAPEKEY) {
 			Key *key = BKE_key_from_object(obact);
 			if (key)
-				adt = BKE_id_add_animdata(&key->id);  /* this only adds if non-existent */
+				adt = BKE_animdata_add_id(&key->id);  /* this only adds if non-existent */
 		}
 		
 		/* set action */
@@ -1123,7 +1227,7 @@ static void rna_SpaceDopeSheetEditor_action_update(Main *UNUSED(bmain), Scene *s
 			/* fix id-count of action we're replacing */
 			id_us_min(&adt->action->id);
 			
-			/* show new id-count of action we're replacing */
+			/* assign new action, and adjust the usercounts accordingly */
 			adt->action = saction->action;
 			id_us_plus(&adt->action->id);
 			
@@ -1368,6 +1472,271 @@ static void rna_SpaceClipEditor_view_type_update(Main *UNUSED(bmain), Scene *UNU
 	ED_area_tag_refresh(sa);
 }
 
+/* File browser. */
+
+static void rna_FileBrowser_FSMenuEntry_path_get(PointerRNA *ptr, char *value)
+{
+	char *path = ED_fsmenu_entry_get_path(ptr->data);
+
+	strcpy(value, path ? path : "");
+}
+
+static int rna_FileBrowser_FSMenuEntry_path_length(PointerRNA *ptr)
+{
+	char *path = ED_fsmenu_entry_get_path(ptr->data);
+
+	return (int)(path ? strlen(path) : 0);
+}
+
+static void rna_FileBrowser_FSMenuEntry_path_set(PointerRNA *ptr, const char *value)
+{
+	FSMenuEntry *fsm = ptr->data;
+
+	/* Note: this will write to file immediately.
+	 * Not nice (and to be fixed ultimately), but acceptable in this case for now. */
+	ED_fsmenu_entry_set_path(fsm, value);
+}
+
+static void rna_FileBrowser_FSMenuEntry_name_get(PointerRNA *ptr, char *value)
+{
+	strcpy(value, ED_fsmenu_entry_get_name(ptr->data));
+}
+
+static int rna_FileBrowser_FSMenuEntry_name_length(PointerRNA *ptr)
+{
+	return (int)strlen(ED_fsmenu_entry_get_name(ptr->data));
+}
+
+static void rna_FileBrowser_FSMenuEntry_name_set(PointerRNA *ptr, const char *value)
+{
+	FSMenuEntry *fsm = ptr->data;
+
+	/* Note: this will write to file immediately.
+	 * Not nice (and to be fixed ultimately), but acceptable in this case for now. */
+	ED_fsmenu_entry_set_name(fsm, value);
+}
+
+static int rna_FileBrowser_FSMenuEntry_name_get_editable(PointerRNA *ptr)
+{
+	FSMenuEntry *fsm = ptr->data;
+
+	return fsm->save;
+}
+
+static void rna_FileBrowser_FSMenu_next(CollectionPropertyIterator *iter)
+{
+	ListBaseIterator *internal = &iter->internal.listbase;
+
+	if (internal->skip) {
+		do {
+			internal->link = (Link *)(((FSMenuEntry *)(internal->link))->next);
+			iter->valid = (internal->link != NULL);
+		} while (iter->valid && internal->skip(iter, internal->link));
+	}
+	else {
+		internal->link = (Link *)(((FSMenuEntry *)(internal->link))->next);
+		iter->valid = (internal->link != NULL);
+	}
+}
+
+static void rna_FileBrowser_FSMenu_begin(CollectionPropertyIterator *iter, FSMenuCategory category)
+{
+	ListBaseIterator *internal = &iter->internal.listbase;
+
+	struct FSMenu *fsmenu = ED_fsmenu_get();
+	struct FSMenuEntry *fsmentry = ED_fsmenu_get_category(fsmenu, category);
+
+	internal->link = (fsmentry) ? (Link *)fsmentry : NULL;
+	internal->skip = NULL;
+
+	iter->valid = (internal->link != NULL);
+}
+
+static PointerRNA rna_FileBrowser_FSMenu_get(CollectionPropertyIterator *iter)
+{
+	ListBaseIterator *internal = &iter->internal.listbase;
+	PointerRNA r_ptr;
+
+	RNA_pointer_create(NULL, &RNA_FileBrowserFSMenuEntry, internal->link, &r_ptr);
+
+	return r_ptr;
+}
+
+static void rna_FileBrowser_FSMenu_end(CollectionPropertyIterator *UNUSED(iter))
+{
+}
+
+static void rna_FileBrowser_FSMenuSystem_data_begin(CollectionPropertyIterator *iter, PointerRNA *UNUSED(ptr))
+{
+	rna_FileBrowser_FSMenu_begin(iter, FS_CATEGORY_SYSTEM);
+}
+
+static int rna_FileBrowser_FSMenuSystem_data_length(PointerRNA *UNUSED(ptr))
+{
+	struct FSMenu *fsmenu = ED_fsmenu_get();
+
+	return ED_fsmenu_get_nentries(fsmenu, FS_CATEGORY_SYSTEM);
+}
+
+static void rna_FileBrowser_FSMenuSystemBookmark_data_begin(CollectionPropertyIterator *iter, PointerRNA *UNUSED(ptr))
+{
+	rna_FileBrowser_FSMenu_begin(iter, FS_CATEGORY_SYSTEM_BOOKMARKS);
+}
+
+static int rna_FileBrowser_FSMenuSystemBookmark_data_length(PointerRNA *UNUSED(ptr))
+{
+	struct FSMenu *fsmenu = ED_fsmenu_get();
+
+	return ED_fsmenu_get_nentries(fsmenu, FS_CATEGORY_SYSTEM_BOOKMARKS);
+}
+
+static void rna_FileBrowser_FSMenuBookmark_data_begin(CollectionPropertyIterator *iter, PointerRNA *UNUSED(ptr))
+{
+	rna_FileBrowser_FSMenu_begin(iter, FS_CATEGORY_BOOKMARKS);
+}
+
+static int rna_FileBrowser_FSMenuBookmark_data_length(PointerRNA *UNUSED(ptr))
+{
+	struct FSMenu *fsmenu = ED_fsmenu_get();
+
+	return ED_fsmenu_get_nentries(fsmenu, FS_CATEGORY_BOOKMARKS);
+}
+
+static void rna_FileBrowser_FSMenuRecent_data_begin(CollectionPropertyIterator *iter, PointerRNA *UNUSED(ptr))
+{
+	rna_FileBrowser_FSMenu_begin(iter, FS_CATEGORY_RECENT);
+}
+
+static int rna_FileBrowser_FSMenuRecent_data_length(PointerRNA *UNUSED(ptr))
+{
+	struct FSMenu *fsmenu = ED_fsmenu_get();
+
+	return ED_fsmenu_get_nentries(fsmenu, FS_CATEGORY_RECENT);
+}
+
+static int rna_FileBrowser_FSMenu_active_get(PointerRNA *ptr, const FSMenuCategory category)
+{
+	SpaceFile *sf = ptr->data;
+	int actnr = -1;
+
+	switch (category) {
+		case FS_CATEGORY_SYSTEM:
+			actnr = sf->systemnr;
+			break;
+		case FS_CATEGORY_SYSTEM_BOOKMARKS:
+			actnr = sf->system_bookmarknr;
+			break;
+		case FS_CATEGORY_BOOKMARKS:
+			actnr = sf->bookmarknr;
+			break;
+		case FS_CATEGORY_RECENT:
+			actnr = sf->recentnr;
+			break;
+	}
+
+	return actnr;
+}
+
+static void rna_FileBrowser_FSMenu_active_set(PointerRNA *ptr, int value, const FSMenuCategory category)
+{
+	SpaceFile *sf = ptr->data;
+	struct FSMenu *fsmenu = ED_fsmenu_get();
+	FSMenuEntry *fsm = ED_fsmenu_get_entry(fsmenu, category, value);
+
+	if (fsm && sf->params) {
+		switch (category) {
+			case FS_CATEGORY_SYSTEM:
+				sf->systemnr = value;
+				break;
+			case FS_CATEGORY_SYSTEM_BOOKMARKS:
+				sf->system_bookmarknr = value;
+				break;
+			case FS_CATEGORY_BOOKMARKS:
+				sf->bookmarknr = value;
+				break;
+			case FS_CATEGORY_RECENT:
+				sf->recentnr = value;
+				break;
+		}
+
+		BLI_strncpy(sf->params->dir, fsm->path, sizeof(sf->params->dir));
+	}
+}
+
+static void rna_FileBrowser_FSMenu_active_range(
+        PointerRNA *UNUSED(ptr), int *min, int *max, int *softmin, int *softmax, const FSMenuCategory category)
+{
+	struct FSMenu *fsmenu = ED_fsmenu_get();
+
+	*min = *softmin = -1;
+	*max = *softmax = ED_fsmenu_get_nentries(fsmenu, category) - 1;
+}
+
+static void rna_FileBrowser_FSMenu_active_update(struct bContext *C, PointerRNA *UNUSED(ptr))
+{
+	ED_file_change_dir(C, true);
+}
+
+static int rna_FileBrowser_FSMenuSystem_active_get(PointerRNA *ptr)
+{
+	return rna_FileBrowser_FSMenu_active_get(ptr, FS_CATEGORY_SYSTEM);
+}
+
+static void rna_FileBrowser_FSMenuSystem_active_set(PointerRNA *ptr, int value)
+{
+	rna_FileBrowser_FSMenu_active_set(ptr, value, FS_CATEGORY_SYSTEM);
+}
+
+static void rna_FileBrowser_FSMenuSystem_active_range(PointerRNA *ptr, int *min, int *max, int *softmin, int *softmax)
+{
+	rna_FileBrowser_FSMenu_active_range(ptr, min, max, softmin, softmax, FS_CATEGORY_SYSTEM);
+}
+
+static int rna_FileBrowser_FSMenuSystemBookmark_active_get(PointerRNA *ptr)
+{
+	return rna_FileBrowser_FSMenu_active_get(ptr, FS_CATEGORY_SYSTEM_BOOKMARKS);
+}
+
+static void rna_FileBrowser_FSMenuSystemBookmark_active_set(PointerRNA *ptr, int value)
+{
+	rna_FileBrowser_FSMenu_active_set(ptr, value, FS_CATEGORY_SYSTEM_BOOKMARKS);
+}
+
+static void rna_FileBrowser_FSMenuSystemBookmark_active_range(PointerRNA *ptr, int *min, int *max, int *softmin, int *softmax)
+{
+	rna_FileBrowser_FSMenu_active_range(ptr, min, max, softmin, softmax, FS_CATEGORY_SYSTEM_BOOKMARKS);
+}
+
+static int rna_FileBrowser_FSMenuBookmark_active_get(PointerRNA *ptr)
+{
+	return rna_FileBrowser_FSMenu_active_get(ptr, FS_CATEGORY_BOOKMARKS);
+}
+
+static void rna_FileBrowser_FSMenuBookmark_active_set(PointerRNA *ptr, int value)
+{
+	rna_FileBrowser_FSMenu_active_set(ptr, value, FS_CATEGORY_BOOKMARKS);
+}
+
+static void rna_FileBrowser_FSMenuBookmark_active_range(PointerRNA *ptr, int *min, int *max, int *softmin, int *softmax)
+{
+	rna_FileBrowser_FSMenu_active_range(ptr, min, max, softmin, softmax, FS_CATEGORY_BOOKMARKS);
+}
+
+static int rna_FileBrowser_FSMenuRecent_active_get(PointerRNA *ptr)
+{
+	return rna_FileBrowser_FSMenu_active_get(ptr, FS_CATEGORY_RECENT);
+}
+
+static void rna_FileBrowser_FSMenuRecent_active_set(PointerRNA *ptr, int value)
+{
+	rna_FileBrowser_FSMenu_active_set(ptr, value, FS_CATEGORY_RECENT);
+}
+
+static void rna_FileBrowser_FSMenuRecent_active_range(PointerRNA *ptr, int *min, int *max, int *softmin, int *softmax)
+{
+	rna_FileBrowser_FSMenu_active_range(ptr, min, max, softmin, softmax, FS_CATEGORY_RECENT);
+}
+
 #else
 
 static EnumPropertyItem dt_uv_items[] = {
@@ -1565,6 +1934,8 @@ static void rna_def_space_outliner(BlenderRNA *brna)
 		{SO_LIBRARIES, "LIBRARIES", 0, "Blender File", "Display data of current file and linked libraries"},
 		{SO_DATABLOCKS, "DATABLOCKS", 0, "Datablocks", "Display all raw datablocks"},
 		{SO_USERDEF, "USER_PREFERENCES", 0, "User Preferences", "Display the user preference datablocks"},
+		{SO_ID_ORPHANS, "ORPHAN_DATA", 0, "Orphan Data",
+		                "Display datablocks which are unused and/or will be lost when the file is reloaded"},
 		{0, NULL, 0, NULL, NULL}
 	};
 	
@@ -1853,7 +2224,6 @@ static void rna_def_space_view3d(BlenderRNA *brna)
 		{0, NULL, 0, NULL, NULL}
 	};
 	
-
 	srna = RNA_def_struct(brna, "SpaceView3D", "Space");
 	RNA_def_struct_sdna(srna, "View3D");
 	RNA_def_struct_ui_text(srna, "3D View Space", "3D View space data");
@@ -2195,6 +2565,52 @@ static void rna_def_space_view3d(BlenderRNA *brna)
 	RNA_def_property_ui_text(prop, "Matcap", "Image to use for Material Capture, active objects only");
 	RNA_def_property_update(prop, NC_SPACE | ND_SPACE_VIEW3D, "rna_SpaceView3D_matcap_update");
 
+	prop = RNA_def_property(srna, "fx_settings", PROP_POINTER, PROP_NONE);
+	RNA_def_property_ui_text(prop, "FX Options", "Options used for real time compositing");
+	RNA_def_property_update(prop, NC_SPACE | ND_SPACE_VIEW3D, NULL);
+
+	/* Stereo Settings */
+	prop = RNA_def_property(srna, "stereo_3d_eye", PROP_ENUM, PROP_NONE);
+	RNA_def_property_enum_sdna(prop, NULL, "multiview_eye");
+	RNA_def_property_enum_items(prop, stereo3d_eye_items);
+	RNA_def_property_enum_funcs(prop, NULL, NULL, "rna_SpaceView3D_stereo3d_camera_itemf");
+	RNA_def_property_ui_text(prop, "Stereo Eye", "Current stereo eye being drawn");
+	RNA_def_property_clear_flag(prop, PROP_EDITABLE);
+
+	prop = RNA_def_property(srna, "stereo_3d_camera", PROP_ENUM, PROP_NONE);
+	RNA_def_property_enum_sdna(prop, NULL, "stereo3d_camera");
+	RNA_def_property_enum_items(prop, stereo3d_camera_items);
+	RNA_def_property_enum_funcs(prop, NULL, NULL, "rna_SpaceView3D_stereo3d_camera_itemf");
+	RNA_def_property_ui_text(prop, "Camera", "");
+	RNA_def_property_update(prop, NC_SPACE | ND_SPACE_VIEW3D, NULL);
+
+	prop = RNA_def_property(srna, "show_stereo_3d_cameras", PROP_BOOLEAN, PROP_NONE);
+	RNA_def_property_boolean_sdna(prop, NULL, "stereo3d_flag", V3D_S3D_DISPCAMERAS);
+	RNA_def_property_ui_text(prop, "Cameras", "Show the left and right cameras");
+	RNA_def_property_update(prop, NC_SPACE | ND_SPACE_VIEW3D, NULL);
+
+	prop = RNA_def_property(srna, "show_stereo_3d_convergence_plane", PROP_BOOLEAN, PROP_NONE);
+	RNA_def_property_boolean_sdna(prop, NULL, "stereo3d_flag", V3D_S3D_DISPPLANE);
+	RNA_def_property_ui_text(prop, "Plane", "Show the stereo 3d convergence plane");
+	RNA_def_property_update(prop, NC_SPACE | ND_SPACE_VIEW3D, NULL);
+
+	prop = RNA_def_property(srna, "stereo_3d_convergence_plane_alpha", PROP_FLOAT, PROP_FACTOR);
+	RNA_def_property_float_sdna(prop, NULL, "stereo3d_convergence_alpha");
+	RNA_def_property_ui_text(prop, "Plane Alpha", "Opacity (alpha) of the convergence plane");
+	RNA_def_property_update(prop, NC_SPACE | ND_SPACE_VIEW3D, NULL);
+
+	prop = RNA_def_property(srna, "show_stereo_3d_volume", PROP_BOOLEAN, PROP_NONE);
+	RNA_def_property_boolean_sdna(prop, NULL, "stereo3d_flag", V3D_S3D_DISPVOLUME);
+	RNA_def_property_ui_text(prop, "Volume", "Show the stereo 3d frustum volume");
+	RNA_def_property_update(prop, NC_SPACE | ND_SPACE_VIEW3D, NULL);
+
+	prop = RNA_def_property(srna, "stereo_3d_volume_alpha", PROP_FLOAT, PROP_FACTOR);
+	RNA_def_property_float_sdna(prop, NULL, "stereo3d_volume_alpha");
+	RNA_def_property_ui_text(prop, "Volume Alpha", "Opacity (alpha) of the cameras' frustum volume");
+	RNA_def_property_update(prop, NC_SPACE | ND_SPACE_VIEW3D, NULL);
+
+	/* *** Animated *** */
+	RNA_define_animate_sdna(true);
 	/* region */
 
 	srna = RNA_def_struct(brna, "RegionView3D", NULL);
@@ -2368,7 +2784,7 @@ static void rna_def_space_image(BlenderRNA *brna)
 	RNA_def_property_pointer_funcs(prop, NULL, "rna_SpaceImageEditor_image_set", NULL, NULL);
 	RNA_def_property_ui_text(prop, "Image", "Image displayed and edited in this space");
 	RNA_def_property_flag(prop, PROP_EDITABLE);
-	RNA_def_property_update(prop, NC_GEOM | ND_DATA, NULL); /* is handled in image editor too */
+	RNA_def_property_update(prop, NC_GEOM | ND_DATA, "rna_SpaceImageEditor_image_update"); /* is handled in image editor too */
 
 	prop = RNA_def_property(srna, "image_user", PROP_POINTER, PROP_NONE);
 	RNA_def_property_flag(prop, PROP_NEVER_NULL);
@@ -2419,6 +2835,12 @@ static void rna_def_space_image(BlenderRNA *brna)
 	RNA_def_property_enum_funcs(prop, NULL, NULL, "rna_SpaceImageEditor_draw_channels_itemf");
 	RNA_def_property_ui_text(prop, "Draw Channels", "Channels of the image to draw");
 	RNA_def_property_update(prop, NC_SPACE | ND_SPACE_IMAGE, NULL);
+
+	prop = RNA_def_property(srna, "show_stereo_3d", PROP_BOOLEAN, PROP_NONE);
+	RNA_def_property_boolean_funcs(prop, "rna_SpaceImageEditor_show_stereo_get", "rna_SpaceImageEditor_show_stereo_set");
+	RNA_def_property_ui_text(prop, "Show Stereo", "Display the image in Stereo 3D");
+	RNA_def_property_ui_icon(prop, ICON_CAMERA_STEREO, 0);
+	RNA_def_property_update(prop, NC_SPACE | ND_SPACE_IMAGE, "rna_SpaceImageEditor_show_stereo_update");
 
 	/* uv */
 	prop = RNA_def_property(srna, "uv_editor", PROP_POINTER, PROP_NONE);
@@ -3003,12 +3425,6 @@ static void rna_def_space_graph(BlenderRNA *brna)
 	RNA_def_property_clear_flag(prop, PROP_EDITABLE);
 	RNA_def_property_ui_text(prop, "Has Ghost Curves", "Graph Editor instance has some ghost curves stored");
 
-	/* auto view */
-	prop = RNA_def_property(srna, "use_auto_view_selected", PROP_BOOLEAN, PROP_NONE);
-	RNA_def_property_boolean_sdna(prop, NULL, "flag", SIPO_AUTO_VIEW_SELECTED);
-	RNA_def_property_ui_text(prop, "Auto View Selected", "Automatically adjust view based on selection");
-	RNA_def_property_update(prop, NC_SPACE | ND_SPACE_GRAPH, NULL);
-
 	/* nromalize curves */
 	prop = RNA_def_property(srna, "use_normalization", PROP_BOOLEAN, PROP_NONE);
 	RNA_def_property_boolean_sdna(prop, NULL, "flag", SIPO_NORMALIZE);
@@ -3332,6 +3748,42 @@ static void rna_def_fileselect_params(BlenderRNA *brna)
 	RNA_def_property_update(prop, NC_SPACE | ND_SPACE_FILE_LIST, NULL);
 }
 
+static void rna_def_filemenu_entry(BlenderRNA *brna)
+{
+	StructRNA *srna;
+	PropertyRNA *prop;
+
+	srna = RNA_def_struct(brna, "FileBrowserFSMenuEntry", NULL);
+	RNA_def_struct_sdna(srna, "FSMenuEntry");
+	RNA_def_struct_ui_text(srna, "File Select Parameters", "File Select Parameters");
+
+	prop = RNA_def_property(srna, "path", PROP_STRING, PROP_FILEPATH);
+	RNA_def_property_string_sdna(prop, NULL, "path");
+	RNA_def_property_string_funcs(prop, "rna_FileBrowser_FSMenuEntry_path_get",
+	                                    "rna_FileBrowser_FSMenuEntry_path_length",
+	                                    "rna_FileBrowser_FSMenuEntry_path_set");
+	RNA_def_property_ui_text(prop, "Path", "");
+
+	prop = RNA_def_property(srna, "name", PROP_STRING, PROP_NONE);
+	RNA_def_property_string_sdna(prop, NULL, "name");
+	RNA_def_property_string_funcs(prop, "rna_FileBrowser_FSMenuEntry_name_get",
+	                                    "rna_FileBrowser_FSMenuEntry_name_length",
+	                                    "rna_FileBrowser_FSMenuEntry_name_set");
+	RNA_def_property_editable_func(prop, "rna_FileBrowser_FSMenuEntry_name_get_editable");
+	RNA_def_property_ui_text(prop, "Name", "");
+	RNA_def_struct_name_property(srna, prop);
+
+	prop = RNA_def_property(srna, "use_save", PROP_BOOLEAN, PROP_NONE);
+	RNA_def_property_boolean_sdna(prop, NULL, "save", 1);
+	RNA_def_property_ui_text(prop, "Save", "Whether this path is saved in bookmarks, or generated from OS");
+	RNA_def_property_clear_flag(prop, PROP_EDITABLE);
+
+	prop = RNA_def_property(srna, "is_valid", PROP_BOOLEAN, PROP_NONE);
+	RNA_def_property_boolean_sdna(prop, NULL, "valid", 1);
+	RNA_def_property_ui_text(prop, "Valid", "Whether this path is currently reachable");
+	RNA_def_property_clear_flag(prop, PROP_EDITABLE);
+}
+
 static void rna_def_space_filebrowser(BlenderRNA *brna)
 {
 	StructRNA *srna;
@@ -3354,6 +3806,67 @@ static void rna_def_space_filebrowser(BlenderRNA *brna)
 	prop = RNA_def_property(srna, "operator", PROP_POINTER, PROP_NONE);
 	RNA_def_property_pointer_sdna(prop, NULL, "op");
 	RNA_def_property_ui_text(prop, "Active Operator", "");
+
+	/* bookmarks, recent files etc. */
+	prop = RNA_def_collection(srna, "system_folders", "FileBrowserFSMenuEntry", "System Folders",
+	                          "System's folders (usually root, available hard drives, etc)");
+	RNA_def_property_collection_funcs(prop, "rna_FileBrowser_FSMenuSystem_data_begin", "rna_FileBrowser_FSMenu_next",
+	                                  "rna_FileBrowser_FSMenu_end", "rna_FileBrowser_FSMenu_get",
+	                                  "rna_FileBrowser_FSMenuSystem_data_length", NULL, NULL, NULL);
+	RNA_def_property_clear_flag(prop, PROP_EDITABLE);
+
+	prop = RNA_def_int(srna, "system_folders_active", -1, -1, INT_MAX, "Active System Folder",
+	                   "Index of active system folder (-1 if none)", -1, INT_MAX);
+	RNA_def_property_int_sdna(prop, NULL, "systemnr");
+	RNA_def_property_int_funcs(prop, "rna_FileBrowser_FSMenuSystem_active_get",
+	                           "rna_FileBrowser_FSMenuSystem_active_set", "rna_FileBrowser_FSMenuSystem_active_range");
+	RNA_def_property_flag(prop, PROP_CONTEXT_UPDATE);
+	RNA_def_property_update(prop, NC_SPACE | ND_SPACE_FILE_PARAMS, "rna_FileBrowser_FSMenu_active_update");
+
+	prop = RNA_def_collection(srna, "system_bookmarks", "FileBrowserFSMenuEntry", "System Bookmarks",
+	                          "System's bookmarks");
+	RNA_def_property_collection_funcs(prop, "rna_FileBrowser_FSMenuSystemBookmark_data_begin", "rna_FileBrowser_FSMenu_next",
+	                                  "rna_FileBrowser_FSMenu_end", "rna_FileBrowser_FSMenu_get",
+	                                  "rna_FileBrowser_FSMenuSystemBookmark_data_length", NULL, NULL, NULL);
+	RNA_def_property_clear_flag(prop, PROP_EDITABLE);
+
+	prop = RNA_def_int(srna, "system_bookmarks_active", -1, -1, INT_MAX, "Active System Bookmark",
+	                   "Index of active system bookmark (-1 if none)", -1, INT_MAX);
+	RNA_def_property_int_sdna(prop, NULL, "system_bookmarknr");
+	RNA_def_property_int_funcs(prop, "rna_FileBrowser_FSMenuSystemBookmark_active_get",
+	                           "rna_FileBrowser_FSMenuSystemBookmark_active_set", "rna_FileBrowser_FSMenuSystemBookmark_active_range");
+	RNA_def_property_flag(prop, PROP_CONTEXT_UPDATE);
+	RNA_def_property_update(prop, NC_SPACE | ND_SPACE_FILE_PARAMS, "rna_FileBrowser_FSMenu_active_update");
+
+	prop = RNA_def_collection(srna, "bookmarks", "FileBrowserFSMenuEntry", "Bookmarks",
+	                          "User's bookmarks");
+	RNA_def_property_collection_funcs(prop, "rna_FileBrowser_FSMenuBookmark_data_begin", "rna_FileBrowser_FSMenu_next",
+	                                  "rna_FileBrowser_FSMenu_end", "rna_FileBrowser_FSMenu_get",
+	                                  "rna_FileBrowser_FSMenuBookmark_data_length", NULL, NULL, NULL);
+	RNA_def_property_clear_flag(prop, PROP_EDITABLE);
+
+	prop = RNA_def_int(srna, "bookmarks_active", -1, -1, INT_MAX, "Active Bookmark",
+	                   "Index of active bookmark (-1 if none)", -1, INT_MAX);
+	RNA_def_property_int_sdna(prop, NULL, "bookmarknr");
+	RNA_def_property_int_funcs(prop, "rna_FileBrowser_FSMenuBookmark_active_get",
+	                           "rna_FileBrowser_FSMenuBookmark_active_set", "rna_FileBrowser_FSMenuBookmark_active_range");
+	RNA_def_property_flag(prop, PROP_CONTEXT_UPDATE);
+	RNA_def_property_update(prop, NC_SPACE | ND_SPACE_FILE_PARAMS, "rna_FileBrowser_FSMenu_active_update");
+
+	prop = RNA_def_collection(srna, "recent_folders", "FileBrowserFSMenuEntry", "Recent Folders",
+	                          "");
+	RNA_def_property_collection_funcs(prop, "rna_FileBrowser_FSMenuRecent_data_begin", "rna_FileBrowser_FSMenu_next",
+	                                  "rna_FileBrowser_FSMenu_end", "rna_FileBrowser_FSMenu_get",
+	                                  "rna_FileBrowser_FSMenuRecent_data_length", NULL, NULL, NULL);
+	RNA_def_property_clear_flag(prop, PROP_EDITABLE);
+
+	prop = RNA_def_int(srna, "recent_folders_active", -1, -1, INT_MAX, "Active Recent Folder",
+	                   "Index of active recent folder (-1 if none)", -1, INT_MAX);
+	RNA_def_property_int_sdna(prop, NULL, "recentnr");
+	RNA_def_property_int_funcs(prop, "rna_FileBrowser_FSMenuRecent_active_get",
+	                           "rna_FileBrowser_FSMenuRecent_active_set", "rna_FileBrowser_FSMenuRecent_active_range");
+	RNA_def_property_flag(prop, PROP_CONTEXT_UPDATE);
+	RNA_def_property_update(prop, NC_SPACE | ND_SPACE_FILE_PARAMS, "rna_FileBrowser_FSMenu_active_update");
 }
 
 static void rna_def_space_info(BlenderRNA *brna)
@@ -3957,6 +4470,7 @@ void RNA_def_space(BlenderRNA *brna)
 	rna_def_space_sequencer(brna);
 	rna_def_space_text(brna);
 	rna_def_fileselect_params(brna);
+	rna_def_filemenu_entry(brna);
 	rna_def_space_filebrowser(brna);
 	rna_def_space_outliner(brna);
 	rna_def_background_image(brna);

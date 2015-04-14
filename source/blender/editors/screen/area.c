@@ -493,7 +493,6 @@ void ED_region_do_draw(bContext *C, ARegion *ar)
 	glDisable(GL_BLEND);
 #endif
 
-	ar->do_draw = 0;
 	memset(&ar->drawrct, 0, sizeof(ar->drawrct));
 	
 	UI_blocklist_free_inactive(C, &ar->uiblocks);
@@ -773,7 +772,7 @@ static void region_azone_tab_plus(ScrArea *sa, AZone *az, ARegion *ar)
 	
 	switch (az->edge) {
 		case AE_TOP_TO_BOTTOMRIGHT:
-			if (ar->winrct.ymax == sa->totrct.ymin) add = 1; else add = 0;
+			add = (ar->winrct.ymax == sa->totrct.ymin) ? 1 : 0;
 			az->x1 = ar->winrct.xmax - 2.5f * AZONEPAD_TAB_PLUSW;
 			az->y1 = ar->winrct.ymax - add;
 			az->x2 = ar->winrct.xmax - 1.5f * AZONEPAD_TAB_PLUSW;
@@ -818,7 +817,7 @@ static void region_azone_tab(ScrArea *sa, AZone *az, ARegion *ar)
 	
 	switch (az->edge) {
 		case AE_TOP_TO_BOTTOMRIGHT:
-			if (ar->winrct.ymax == sa->totrct.ymin) add = 1; else add = 0;
+			add = (ar->winrct.ymax == sa->totrct.ymin) ? 1 : 0;
 			az->x1 = ar->winrct.xmax - 2 * AZONEPAD_TABW;
 			az->y1 = ar->winrct.ymax - add;
 			az->x2 = ar->winrct.xmax - AZONEPAD_TABW;
@@ -863,7 +862,7 @@ static void region_azone_tria(ScrArea *sa, AZone *az, ARegion *ar)
 	
 	switch (az->edge) {
 		case AE_TOP_TO_BOTTOMRIGHT:
-			if (ar->winrct.ymax == sa->totrct.ymin) add = 1; else add = 0;
+			add = (ar->winrct.ymax == sa->totrct.ymin) ? 1 : 0;
 			az->x1 = ar->winrct.xmax - 2 * AZONEPAD_TRIAW;
 			az->y1 = ar->winrct.ymax - add;
 			az->x2 = ar->winrct.xmax - AZONEPAD_TRIAW;
@@ -1478,7 +1477,7 @@ void region_toggle_hidden(bContext *C, ARegion *ar, const bool do_fade)
 /* exported to all editors, uses fading default */
 void ED_region_toggle_hidden(bContext *C, ARegion *ar)
 {
-	region_toggle_hidden(C, ar, 1);
+	region_toggle_hidden(C, ar, true);
 }
 
 /**
@@ -1522,10 +1521,10 @@ void ED_area_data_copy(ScrArea *sa_dst, ScrArea *sa_src, const bool do_free)
 
 void ED_area_data_swap(ScrArea *sa_dst, ScrArea *sa_src)
 {
-	sa_dst->headertype = sa_src->headertype;
-	sa_dst->spacetype = sa_src->spacetype;
-	sa_dst->type = sa_src->type;
-	sa_dst->butspacetype = sa_src->butspacetype;
+	SWAP(short, sa_dst->headertype, sa_src->headertype);
+	SWAP(char, sa_dst->spacetype, sa_src->spacetype);
+	SWAP(SpaceType *, sa_dst->type, sa_src->type);
+	SWAP(char, sa_dst->butspacetype, sa_src->butspacetype);
 
 
 	SWAP(ListBase, sa_dst->spacedata, sa_src->spacedata);
@@ -1631,7 +1630,7 @@ void ED_area_newspace(bContext *C, ScrArea *sa, int type)
 
 void ED_area_prevspace(bContext *C, ScrArea *sa)
 {
-	SpaceLink *sl = (sa) ? sa->spacedata.first : CTX_wm_space_data(C);
+	SpaceLink *sl = sa->spacedata.first;
 
 	if (sl && sl->next) {
 		/* workaround for case of double prevspace, render window

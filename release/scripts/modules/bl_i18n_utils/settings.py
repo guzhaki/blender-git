@@ -101,7 +101,7 @@ IMPORT_MIN_LEVEL = 0.0
 
 # Languages in /branches we do not want to import in /trunk currently...
 IMPORT_LANGUAGES_SKIP = {
-    'am_ET', 'bg_BG', 'fi_FI', 'el_GR', 'et_EE', 'ne_NP', 'pl_PL', 'ro_RO', 'uz_UZ', 'uz_UZ@cyrillic',
+    'am_ET', 'bg_BG', 'fi_FI', 'el_GR', 'et_EE', 'ne_NP', 'ro_RO', 'uz_UZ', 'uz_UZ@cyrillic',
 }
 
 # Languages that need RTL pre-processing.
@@ -290,7 +290,6 @@ WARN_MSGID_NOT_CAPITALIZED_ALLOWED = {
     "flac",
     "fps: %.2f",
     "fps: %i",
-    "fStop",
     "gimbal",
     "global",
     "iScale",
@@ -325,6 +324,7 @@ WARN_MSGID_NOT_CAPITALIZED_ALLOWED = {
     "y",
     # Sub-strings.
     "available with",
+    "brown fox",
     "can't save image while rendering",
     "expected a timeline/animation area to be active",
     "expected a view3d region",
@@ -333,6 +333,8 @@ WARN_MSGID_NOT_CAPITALIZED_ALLOWED = {
     "image file not found",
     "image path can't be written to",
     "in memory to enable editing!",
+    "jumps over",
+    "the lazy dog",
     "unable to load movie clip",
     "unable to load text",
     "unable to open the file",

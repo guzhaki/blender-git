@@ -40,6 +40,9 @@
 #include "BLI_math.h"
 #include "BLI_utildefines.h"
 
+#include "BLF_api.h"
+#include "BLF_translation.h"
+
 #include "DNA_gpencil_types.h"
 #include "DNA_scene_types.h"
 #include "DNA_screen_types.h"
@@ -57,11 +60,11 @@
 #include "BIF_glutil.h"
 
 #include "ED_gpencil.h"
+#include "ED_screen.h"
 #include "ED_view3d.h"
 
+#include "UI_interface_icons.h"
 #include "UI_resources.h"
-
-#include "gpencil_intern.h"
 
 /* ************************************************** */
 /* GREASE PENCIL DRAWING */
@@ -363,6 +366,9 @@ static void gp_draw_stroke_fill(bGPDspoint *points, int totpoints, short UNUSED(
 static void gp_draw_stroke_point(bGPDspoint *points, short thickness, short dflag, short sflag,
                                  int offsx, int offsy, int winx, int winy)
 {
+	/* set point thickness (since there's only one of these) */
+	glPointSize((float)(thickness + 2) * points->pressure);
+	
 	/* draw point */
 	if (sflag & GP_STROKE_3DSPACE) {
 		glBegin(GL_POINTS);
@@ -966,9 +972,8 @@ static void gp_draw_data_layers(bGPdata *gpd, int offsx, int offsy, int winx, in
 		if (gpf == NULL)
 			continue;
 		
-		/* set color, stroke thickness, and point size */
+		/* set basic stroke thickness */
 		glLineWidth(lthick);
-		glPointSize((float)(gpl->thickness + 2));
 		
 		/* Add layer drawing settings to the set of "draw flags"
 		 * NOTE: If the setting doesn't apply, it *must* be cleared,
@@ -1042,6 +1047,51 @@ static void gp_draw_data_layers(bGPdata *gpd, int offsx, int offsy, int winx, in
 	}
 }
 
+/* draw a short status message in the top-right corner */
+static void gp_draw_status_text(bGPdata *gpd, ARegion *ar)
+{
+	rcti rect;
+	
+	/* Cannot draw any status text when drawing OpenGL Renders */
+	if (G.f & G_RENDER_OGL)
+		return;
+	
+	/* Get bounds of region - Necessary to avoid problems with region overlap */
+	ED_region_visible_rect(ar, &rect);
+	
+	/* for now, this should only be used to indicate when we are in stroke editmode */
+	if (gpd->flag & GP_DATA_STROKE_EDITMODE) {
+		const char *printable = IFACE_("GPencil Stroke Editing");
+		float       printable_size[2];
+		int xco, yco;
+		
+		BLF_width_and_height_default(printable, BLF_DRAW_STR_DUMMY_MAX, &printable_size[0], &printable_size[1]);
+		
+		xco = (rect.xmax - U.widget_unit) - (int)printable_size[0];
+		yco = (rect.ymax - U.widget_unit);
+		
+		/* text label */
+		UI_ThemeColor(TH_TEXT_HI);
+#ifdef WITH_INTERNATIONAL
+		BLF_draw_default(xco, yco, 0.0f, printable, BLF_DRAW_STR_DUMMY_MAX);
+#else
+		BLF_draw_default_ascii(xco, yco, 0.0f, printable, BLF_DRAW_STR_DUMMY_MAX);
+#endif
+		
+		/* grease pencil icon... */
+		// XXX: is this too intrusive?
+		glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+		glEnable(GL_BLEND);
+		
+		xco -= U.widget_unit;
+		yco -= (int)printable_size[1] / 2;
+
+		UI_icon_draw(xco, yco, ICON_GREASEPENCIL);
+		
+		glDisable(GL_BLEND);
+	}
+}
+
 /* draw grease-pencil datablock */
 static void gp_draw_data(bGPdata *gpd, int offsx, int offsy, int winx, int winy, int cfra, int dflag)
 {
@@ -1051,8 +1101,10 @@ static void gp_draw_data(bGPdata *gpd, int offsx, int offsy, int winx, int winy,
 	/* turn on smooth lines (i.e. anti-aliasing) */
 	glEnable(GL_LINE_SMOOTH);
 	
-	glEnable(GL_POLYGON_SMOOTH);
-	glHint(GL_POLYGON_SMOOTH_HINT, GL_NICEST);
+	/* XXX: turn on some way of ensuring that the polygon edges get smoothed 
+	 *      GL_POLYGON_SMOOTH is nasty and shouldn't be used, as it ends up
+	 *      creating internal white rays due to the ways it accumulates stuff
+	 */
 	
 	/* turn on alpha-blending */
 	glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
@@ -1064,7 +1116,6 @@ static void gp_draw_data(bGPdata *gpd, int offsx, int offsy, int winx, int winy,
 	/* turn off alpha blending, then smooth lines */
 	glDisable(GL_BLEND); // alpha blending
 	glDisable(GL_LINE_SMOOTH); // smooth lines
-	glDisable(GL_POLYGON_SMOOTH); // smooth poly lines
 	
 	/* restore initial gl conditions */
 	glLineWidth(1.0);
@@ -1192,6 +1243,11 @@ void ED_gpencil_draw_view2d(const bContext *C, bool onlyv2d)
 	/* draw it! */
 	if (onlyv2d) dflag |= (GP_DRAWDATA_ONLYV2D | GP_DRAWDATA_NOSTATUS);
 	gp_draw_data_all(scene, gpd, 0, 0, ar->winx, ar->winy, CFRA, dflag, sa->spacetype);
+	
+	/* draw status text (if in screen/pixel-space) */
+	if (onlyv2d == false) {
+		gp_draw_status_text(gpd, ar);
+	}
 }
 
 /* draw grease-pencil sketches to specified 3d-view assuming that matrices are already set correctly
@@ -1226,10 +1282,27 @@ void ED_gpencil_draw_view3d(Scene *scene, View3D *v3d, ARegion *ar, bool only3d)
 		winy  = ar->winy;
 	}
 	
-	/* draw it! */
-	if (only3d) dflag |= (GP_DRAWDATA_ONLY3D | GP_DRAWDATA_NOSTATUS);
+	/* set flags */
+	if (only3d) {
+		/* 3D strokes/3D space:
+		 * - only 3D space points
+		 * - don't status text either (as it's the wrong space)
+		 */
+		dflag |= (GP_DRAWDATA_ONLY3D | GP_DRAWDATA_NOSTATUS);
+	}
 	
+	if (v3d->flag2 & V3D_RENDER_OVERRIDE) {
+		/* don't draw status text when "only render" flag is set */
+		dflag |= GP_DRAWDATA_NOSTATUS;
+	}
+	
+	/* draw it! */
 	gp_draw_data_all(scene, gpd, offsx, offsy, winx, winy, CFRA, dflag, v3d->spacetype);
+	
+	/* draw status text (if in screen/pixel-space) */
+	if (only3d == false) {
+		gp_draw_status_text(gpd, ar);
+	}
 }
 
 void ED_gpencil_draw_ex(Scene *scene, bGPdata *gpd, int winx, int winy, const int cfra, const char spacetype)

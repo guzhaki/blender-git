@@ -60,7 +60,8 @@ static void generate_vert_coordinates(
 
 	/* Get size (i.e. deformation of the spheroid generating normals), either from target object, or own geometry. */
 	if (ob_center) {
-		copy_v3_v3(r_size, ob_center->size);
+		/* Not we are not interested in signs here - they are even troublesome actually, due to security clamping! */
+		abs_v3_v3(r_size, ob_center->size);
 	}
 	else {
 		minmax_v3v3_v3_array(min_co, max_co, r_cos, num_verts);
@@ -80,12 +81,10 @@ static void generate_vert_coordinates(
 
 	if (ob_center) {
 		/* Translate our coordinates so that center of ob_center is at (0, 0, 0). */
-		float mat[4][4];
-
-		/* Get ob_center coordinates in ob local coordinates. */
-		invert_m4_m4(mat, ob_center->obmat);
-		mul_m4_m4m4(mat, mat, ob->obmat);
-		copy_v3_v3(diff, mat[3]);
+		/* Get ob_center (world) coordinates in ob local coordinates.
+		 * No need to take into accound ob_center's space here, see T44027. */
+		mul_v3_m4v3(diff, ob->obmat, ob_center->obmat[3]);
+		negate_v3(diff);
 
 		do_diff = true;
 	}
@@ -323,7 +322,7 @@ static bool is_valid_target(NormalEditModifierData *smd)
 	return false;
 }
 
-static void normalEditModifier_do(NormalEditModifierData *smd, Object *ob, DerivedMesh *dm)
+static DerivedMesh *normalEditModifier_do(NormalEditModifierData *smd, Object *ob, DerivedMesh *dm)
 {
 	Mesh *me = ob->data;
 
@@ -331,10 +330,10 @@ static void normalEditModifier_do(NormalEditModifierData *smd, Object *ob, Deriv
 	const int num_edges = dm->getNumEdges(dm);
 	const int num_loops = dm->getNumLoops(dm);
 	const int num_polys = dm->getNumPolys(dm);
-	MVert *mvert = dm->getVertArray(dm);
-	MEdge *medge = dm->getEdgeArray(dm);
-	MLoop *mloop = dm->getLoopArray(dm);
-	MPoly *mpoly = dm->getPolyArray(dm);
+	MVert *mvert;
+	MEdge *medge;
+	MLoop *mloop;
+	MPoly *mpoly;
 
 	const bool use_invert_vgroup = ((smd->flag & MOD_NORMALEDIT_INVERT_VGROUP) != 0);
 	const bool use_current_clnors = !((smd->mix_mode == MOD_NORMALEDIT_MIX_COPY) &&
@@ -352,14 +351,24 @@ static void normalEditModifier_do(NormalEditModifierData *smd, Object *ob, Deriv
 
 	/* Do not run that modifier at all if autosmooth is disabled! */
 	if (!is_valid_target(smd) || !num_loops) {
-		return;
+		return dm;
 	}
 
 	if (!(me->flag & ME_AUTOSMOOTH)) {
 		modifier_setError((ModifierData *)smd, "Enable 'Auto Smooth' option in mesh settings");
-		return;
+		return dm;
 	}
 
+	medge = dm->getEdgeArray(dm);
+	if (me->medge == medge) {
+		/* We need to duplicate data here, otherwise setting custom normals (which may also affect sharp edges) could
+		 * modify org mesh, see T43671. */
+		dm = CDDM_copy(dm);
+		medge = dm->getEdgeArray(dm);
+	}
+	mvert = dm->getVertArray(dm);
+	mloop = dm->getLoopArray(dm);
+	mpoly = dm->getPolyArray(dm);
 
 	if (use_current_clnors) {
 		dm->calcLoopNormals(dm, true, me->smoothresh);
@@ -397,6 +406,8 @@ static void normalEditModifier_do(NormalEditModifierData *smd, Object *ob, Deriv
 	if (free_polynors) {
 		MEM_freeN(polynors);
 	}
+
+	return dm;
 }
 
 static void initData(ModifierData *md)
@@ -453,7 +464,9 @@ static bool isDisabled(ModifierData *md, int UNUSED(useRenderParams))
 	return !is_valid_target(smd);
 }
 
-static void updateDepgraph(ModifierData *md, DagForest *forest, struct Scene *UNUSED(scene),
+static void updateDepgraph(ModifierData *md, DagForest *forest,
+                           struct Main *UNUSED(bmain),
+                           struct Scene *UNUSED(scene),
                            Object *UNUSED(ob), DagNode *obNode)
 {
 	NormalEditModifierData *smd = (NormalEditModifierData *) md;
@@ -467,8 +480,7 @@ static void updateDepgraph(ModifierData *md, DagForest *forest, struct Scene *UN
 
 static DerivedMesh *applyModifier(ModifierData *md, Object *ob, DerivedMesh *dm, ModifierApplyFlag UNUSED(flag))
 {
-	normalEditModifier_do((NormalEditModifierData *)md, ob, dm);
-	return dm;
+	return normalEditModifier_do((NormalEditModifierData *)md, ob, dm);
 }
 
 ModifierTypeInfo modifierType_NormalEdit = {

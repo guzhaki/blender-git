@@ -461,6 +461,7 @@ protected:
 	class CcdShapeConstructionInfo* m_shapeInfo;
 	btCollisionShape* m_bulletChildShape;
 
+	btAlignedObjectArray<btTypedConstraint*> m_ccdConstraintRefs; // keep track of typed constraints referencing this rigid body
 	friend class CcdPhysicsEnvironment;	// needed when updating the controller
 
 	//some book keeping for replication
@@ -480,6 +481,7 @@ protected:
 	short m_savedCollisionFilterGroup;
 	short m_savedCollisionFilterMask;
 	MT_Scalar m_savedMass;
+	bool m_savedDyna;
 	bool m_suspended;
 
 
@@ -495,6 +497,11 @@ protected:
 	bool Unregister() {
 		return (--m_registerCount == 0) ? true : false;
 	}
+
+	void addCcdConstraintRef(btTypedConstraint* c);
+	void removeCcdConstraintRef(btTypedConstraint* c);
+	btTypedConstraint* getCcdConstraintRef(int index);
+	int getNumCcdConstraintRefs() const;
 
 	void SetWorldOrientation(const btMatrix3x3& mat);
 	void ForceWorldTransform(const btMatrix3x3& mat, const btVector3& pos);
@@ -705,12 +712,20 @@ protected:
 			return GetConstructionInfo().m_bDyna;
 		}
 
+		virtual bool IsSuspended() const
+		{
+			return m_suspended;
+		}
+
 		virtual bool IsCompound()
 		{
 			return GetConstructionInfo().m_shapeInfo->m_shapeType == PHY_SHAPE_COMPOUND;
 		}
 
 		virtual bool ReinstancePhysicsShape(KX_GameObject *from_gameobj, RAS_MeshObject* from_meshobj);
+
+		/* Method to replicate rigid body joint contraints for group instances. */
+		virtual void ReplicateConstraints(KX_GameObject *gameobj, std::vector<KX_GameObject*> constobj);
 
 #ifdef WITH_CXX_GUARDEDALLOC
 	MEM_CXX_CLASS_ALLOC_FUNCS("GE:CcdPhysicsController")

@@ -391,7 +391,7 @@ int ED_operator_editarmature(bContext *C)
  * \brief check for pose mode (no mixed modes)
  *
  * We want to enable most pose operations in weight paint mode,
- * when it comes to transforming bones, but managing bomes layers/groups
+ * when it comes to transforming bones, but managing bones layers/groups
  * can be left for pose mode only. (not weight paint mode)
  */
 int ED_operator_posemode_exclusive(bContext *C)
@@ -717,7 +717,7 @@ static void actionzone_apply(bContext *C, wmOperator *op, int type)
 	else
 		event.type = EVT_ACTIONZONE_REGION;
 
-	event.val = 0;
+	event.val = KM_NOTHING;
 	event.customdata = op->customdata;
 	event.customdatafree = true;
 	op->customdata = NULL;
@@ -990,6 +990,7 @@ static int area_dupli_invoke(bContext *C, wmOperator *op, const wmEvent *event)
 	rect.ymax = rect.ymin + BLI_rcti_size_y(&rect) / U.pixelsize;
 
 	newwin = WM_window_open(C, &rect);
+	*newwin->stereo3d_format = *win->stereo3d_format;
 	
 	/* allocs new screen and adds to newly created window, using window size */
 	newsc = ED_screen_add(newwin, CTX_data_scene(C), sc->id.name + 2);
@@ -2042,6 +2043,48 @@ static void SCREEN_OT_region_scale(wmOperatorType *ot)
 
 /* ************** frame change operator ***************************** */
 
+static void areas_do_frame_follow(bContext *C, bool middle)
+{
+	bScreen *scr = CTX_wm_screen(C);
+	Scene *scene = CTX_data_scene(C);
+	wmWindowManager *wm = CTX_wm_manager(C);
+	wmWindow *window;
+	for (window = wm->windows.first; window; window = window->next) {
+		ScrArea *sa;
+		for (sa = window->screen->areabase.first; sa; sa = sa->next) {
+			ARegion *ar;
+			for (ar = sa->regionbase.first; ar; ar = ar->next) {
+				/* do follow here if editor type supports it */
+				if ((scr->redraws_flag & TIME_FOLLOW)) {
+					if ((ar->regiontype == RGN_TYPE_WINDOW &&
+					     ELEM(sa->spacetype, SPACE_SEQ, SPACE_TIME, SPACE_IPO, SPACE_ACTION, SPACE_NLA)) ||
+					    (sa->spacetype == SPACE_CLIP && ar->regiontype == RGN_TYPE_PREVIEW))
+					{
+						float w = BLI_rctf_size_x(&ar->v2d.cur);
+
+						if (middle) {
+							if ((scene->r.cfra < ar->v2d.cur.xmin) || (scene->r.cfra > ar->v2d.cur.xmax)) {
+								ar->v2d.cur.xmax = scene->r.cfra + (w / 2);
+								ar->v2d.cur.xmin = scene->r.cfra - (w / 2);
+							}
+						}
+						else {
+							if (scene->r.cfra < ar->v2d.cur.xmin) {
+								ar->v2d.cur.xmax = scene->r.cfra;
+								ar->v2d.cur.xmin = ar->v2d.cur.xmax - w;
+							}
+							else if (scene->r.cfra > ar->v2d.cur.xmax) {
+								ar->v2d.cur.xmin = scene->r.cfra;
+								ar->v2d.cur.xmax = ar->v2d.cur.xmin + w;
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
 /* function to be called outside UI context, or for redo */
 static int frame_offset_exec(bContext *C, wmOperator *op)
 {
@@ -2055,7 +2098,9 @@ static int frame_offset_exec(bContext *C, wmOperator *op)
 	FRAMENUMBER_MIN_CLAMP(CFRA);
 	SUBFRA = 0.f;
 	
-	sound_seek_scene(bmain, scene);
+	areas_do_frame_follow(C, false);
+
+	BKE_sound_seek_scene(bmain, scene);
 
 	WM_event_add_notifier(C, NC_SCENE | ND_FRAME, scene);
 	
@@ -2105,7 +2150,9 @@ static int frame_jump_exec(bContext *C, wmOperator *op)
 		else
 			CFRA = PSFRA;
 		
-		sound_seek_scene(bmain, scene);
+		areas_do_frame_follow(C, true);
+
+		BKE_sound_seek_scene(bmain, scene);
 
 		WM_event_add_notifier(C, NC_SCENE | ND_FRAME, scene);
 	}
@@ -2209,7 +2256,9 @@ static int keyframe_jump_exec(bContext *C, wmOperator *op)
 		return OPERATOR_CANCELLED;
 	}
 	else {
-		sound_seek_scene(bmain, scene);
+		areas_do_frame_follow(C, true);
+
+		BKE_sound_seek_scene(bmain, scene);
 
 		WM_event_add_notifier(C, NC_SCENE | ND_FRAME, scene);
 
@@ -2269,7 +2318,9 @@ static int marker_jump_exec(bContext *C, wmOperator *op)
 	else {
 		CFRA = closest;
 
-		sound_seek_scene(bmain, scene);
+		areas_do_frame_follow(C, true);
+
+		BKE_sound_seek_scene(bmain, scene);
 
 		WM_event_add_notifier(C, NC_SCENE | ND_FRAME, scene);
 
@@ -3363,9 +3414,16 @@ static int match_region_with_redraws(int spacetype, int regiontype, int redraws)
 	return 0;
 }
 
+//#define PROFILE_AUDIO_SYNCH
+
 static int screen_animation_step(bContext *C, wmOperator *UNUSED(op), const wmEvent *event)
 {
 	bScreen *screen = CTX_wm_screen(C);
+
+#ifdef PROFILE_AUDIO_SYNCH
+	static int old_frame = 0;
+	int newfra_int;
+#endif
 
 	if (screen->animtimer && screen->animtimer == event->customdata) {
 		Main *bmain = CTX_data_main(C);
@@ -3385,14 +3443,27 @@ static int screen_animation_step(bContext *C, wmOperator *UNUSED(op), const wmEv
 		
 		if ((scene->audio.flag & AUDIO_SYNC) &&
 		    (sad->flag & ANIMPLAY_FLAG_REVERSE) == false &&
-		    finite(time = sound_sync_scene(scene)))
+		    finite(time = BKE_sound_sync_scene(scene)))
 		{
 			double newfra = (double)time * FPS;
+
 			/* give some space here to avoid jumps */
 			if (newfra + 0.5 > scene->r.cfra && newfra - 0.5 < scene->r.cfra)
 				scene->r.cfra++;
 			else
 				scene->r.cfra = newfra + 0.5;
+
+#ifdef PROFILE_AUDIO_SYNCH
+			newfra_int = scene->r.cfra;
+			if (newfra_int < old_frame) {
+				printf("back jump detected, frame %d!\n", newfra_int);
+			}
+			else if (newfra_int > old_frame + 1) {
+				printf("forward jump detected, frame %d!\n", newfra_int);
+			}
+			fflush(stdout);
+			old_frame = newfra_int;
+#endif
 		}
 		else {
 			if (sync) {
@@ -3459,8 +3530,12 @@ static int screen_animation_step(bContext *C, wmOperator *UNUSED(op), const wmEv
 			sad->flag |= ANIMPLAY_FLAG_JUMPED;
 		}
 		
-		if (sad->flag & ANIMPLAY_FLAG_JUMPED)
-			sound_seek_scene(bmain, scene);
+		if (sad->flag & ANIMPLAY_FLAG_JUMPED) {
+			BKE_sound_seek_scene(bmain, scene);
+#ifdef PROFILE_AUDIO_SYNCH
+			old_frame = CFRA;
+#endif
+		}
 		
 		/* since we follow drawflags, we can't send notifier but tag regions ourselves */
 		ED_update_for_newframe(bmain, scene, 1);
@@ -3482,11 +3557,15 @@ static int screen_animation_step(bContext *C, wmOperator *UNUSED(op), const wmEv
 						/* do follow here if editor type supports it */
 						if ((sad->redraws & TIME_FOLLOW)) {
 							if ((ar->regiontype == RGN_TYPE_WINDOW &&
-							    ELEM (sa->spacetype, SPACE_SEQ, SPACE_TIME, SPACE_IPO, SPACE_ACTION, SPACE_NLA)) ||
+							     ELEM(sa->spacetype, SPACE_SEQ, SPACE_TIME, SPACE_IPO, SPACE_ACTION, SPACE_NLA)) ||
 							    (sa->spacetype == SPACE_CLIP && ar->regiontype == RGN_TYPE_PREVIEW))
 							{
 								float w = BLI_rctf_size_x(&ar->v2d.cur);
-								if (scene->r.cfra < ar->v2d.cur.xmin || scene->r.cfra > (ar->v2d.cur.xmax)) {
+								if (scene->r.cfra < ar->v2d.cur.xmin) {
+									ar->v2d.cur.xmax = scene->r.cfra;
+									ar->v2d.cur.xmin = ar->v2d.cur.xmax - w;
+								}
+								else if (scene->r.cfra > ar->v2d.cur.xmax) {
 									ar->v2d.cur.xmin = scene->r.cfra;
 									ar->v2d.cur.xmax = ar->v2d.cur.xmin + w;
 								}
@@ -3556,7 +3635,7 @@ int ED_screen_animation_play(bContext *C, int sync, int mode)
 	if (ED_screen_animation_playing(CTX_wm_manager(C))) {
 		/* stop playback now */
 		ED_screen_animation_timer(C, 0, 0, 0, 0);
-		sound_stop_scene(scene);
+		BKE_sound_stop_scene(scene);
 
 		WM_event_add_notifier(C, NC_SCENE | ND_FRAME, scene);
 	}
@@ -3564,7 +3643,7 @@ int ED_screen_animation_play(bContext *C, int sync, int mode)
 		int refresh = SPACE_TIME; /* these settings are currently only available from a menu in the TimeLine */
 		
 		if (mode == 1)  /* XXX only play audio forwards!? */
-			sound_play_scene(scene);
+			BKE_sound_play_scene(scene);
 		
 		ED_screen_animation_timer(C, screen->redraws_flag, refresh, sync, mode);
 		

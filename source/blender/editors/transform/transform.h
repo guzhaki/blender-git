@@ -200,12 +200,23 @@ typedef struct TransDataNla {
 struct LinkNode;
 struct GHash;
 
-typedef struct TransDataEdgeSlideVert {
-	struct BMVert *v_a, *v_b;
+/* header of TransDataEdgeSlideVert, TransDataEdgeSlideEdge */
+typedef struct TransDataGenericSlideVert {
 	struct BMVert *v;
+	struct LinkNode **cd_loop_groups;
+	float co_orig_3d[3];
+} TransDataGenericSlideVert;
+
+typedef struct TransDataEdgeSlideVert {
+	/* TransDataGenericSlideVert */
+	struct BMVert *v;
+	struct LinkNode **cd_loop_groups;
 	float v_co_orig[3];
+	/* end generic */
 
 	float edge_len;
+
+	struct BMVert *v_a, *v_b;
 
 	/* add origvert.co to get the original locations */
 	float dir_a[3], dir_b[3];
@@ -218,8 +229,16 @@ typedef struct TransDataEdgeSlideVert {
 typedef struct SlideOrigData {
 	/* flag that is set when origfaces is initialized */
 	bool use_origfaces;
+	struct GHash    *origverts;  /* map {BMVert: TransDataGenericSlideVert} */
 	struct GHash    *origfaces;
 	struct BMesh *bm_origfaces;
+
+	struct MemArena *arena;
+	/* number of math BMLoop layers */
+	int  layer_math_map_num;
+	/* array size of 'layer_math_map_num'
+	 * maps TransDataVertSlideVert.cd_group index to absolute CustomData layer index */
+	int *layer_math_map;
 } SlideOrigData;
 
 typedef struct EdgeSlideData {
@@ -241,11 +260,13 @@ typedef struct EdgeSlideData {
 
 
 typedef struct TransDataVertSlideVert {
+	/* TransDataGenericSlideVert */
 	BMVert *v;
+	struct LinkNode **cd_loop_groups;
 	float   co_orig_3d[3];
-	float   co_orig_2d[2];
+	/* end generic */
+
 	float (*co_link_orig_3d)[3];
-	float (*co_link_orig_2d)[2];
 	int     co_link_tot;
 	int     co_link_curr;
 } TransDataVertSlideVert;
@@ -264,6 +285,9 @@ typedef struct VertSlideData {
 	bool flipped_vtx;
 
 	int curr_sv_index;
+
+	/* result of ED_view3d_ob_project_mat_get */
+	float proj_mat[4][4];
 } VertSlideData;
 
 typedef struct BoneInitData {
@@ -603,7 +627,7 @@ typedef enum {
 void snapGridIncrement(TransInfo *t, float *val);
 void snapGridIncrementAction(TransInfo *t, float *val, GearsType action);
 
-int snapSequenceBounds(TransInfo *t, const int mval[2]);
+void snapSequenceBounds(TransInfo *t, const int mval[2]);
 
 bool activeSnap(TransInfo *t);
 bool validSnap(TransInfo *t);

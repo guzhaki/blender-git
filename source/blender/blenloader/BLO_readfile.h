@@ -37,13 +37,11 @@ extern "C" {
 #endif
 
 struct bScreen;
-struct direntry;
 struct LinkNode;
 struct Main;
 struct MemFile;
 struct ReportList;
 struct Scene;
-struct SpaceFile;
 struct UserDef;
 struct bContext;
 struct BHead;
